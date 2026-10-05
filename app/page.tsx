@@ -1,69 +1,143 @@
-import Image from "next/image";
+"use client";
+
+import { useState } from "react";
+
+// タスクの型定義
+interface Task {
+  id: string;
+  title: string;
+}
 
 export default function Home() {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [inputTitle, setInputTitle] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+
+  // タスク追加
+  const handleAddTask = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputTitle.trim()) return;
+
+    const newTask: Task = {
+      id: crypto.randomUUID(),
+      title: inputTitle,
+    };
+
+    setTasks([...tasks, newTask]);
+    setInputTitle("");
+  };
+
+  // タスク削除
+  const handleDeleteTask = (id: string) => {
+    setTasks(tasks.filter((task) => task.id !== id));
+  };
+
+  // 編集モード開始
+  const handleStartEdit = (task: Task) => {
+    setEditingId(task.id);
+    setEditingTitle(task.title);
+  };
+
+  // 編集保存
+  const handleSaveEdit = (id: string) => {
+    if (!editingTitle.trim()) return;
+    setTasks(
+      tasks.map((task) =>
+        task.id === id ? { ...task, title: editingTitle } : task
+      )
+    );
+    setEditingId(null);
+    setEditingTitle("");
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-2xl mx-auto space-y-8">
+        {/* ヘッダー */}
+        <div className="text-center">
+          <h1 className="text-3xl font-bold text-gray-900">TaskDecomposer</h1>
+          <p className="mt-2 text-sm text-gray-600">
+            複雑なタスクを入力して管理しましょう（第2週：UIプロトタイプ）
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+
+        {/* タスク入力フォーム */}
+        <form onSubmit={handleAddTask} className="flex gap-2">
+          <input
+            type="text"
+            value={inputTitle}
+            onChange={(e) => setInputTitle(e.target.value)}
+            placeholder="新しいタスクを入力してください..."
+            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+          />
+          <button
+            type="submit"
+            className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
           >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            追加
+          </button>
+        </form>
+
+        {/* タスク一覧 */}
+        <div className="space-y-3">
+          {tasks.length === 0 ? (
+            <p className="text-center text-gray-500 py-8">
+              タスクがまだありません。上のフォームから追加してください。
+            </p>
+          ) : (
+            tasks.map((task) => (
+              <div
+                key={task.id}
+                className="flex items-center justify-between p-4 bg-white rounded-lg border border-gray-200 shadow-sm"
+              >
+                {editingId === task.id ? (
+                  /* 編集モード */
+                  <div className="flex flex-1 gap-2 mr-2">
+                    <input
+                      type="text"
+                      value={editingTitle}
+                      onChange={(e) => setEditingTitle(e.target.value)}
+                      className="flex-1 px-3 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                    />
+                    <button
+                      onClick={() => handleSaveEdit(task.id)}
+                      className="px-3 py-1 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700"
+                    >
+                      保存
+                    </button>
+                    <button
+                      onClick={() => setEditingId(null)}
+                      className="px-3 py-1 bg-gray-300 text-gray-700 text-sm font-medium rounded hover:bg-gray-400"
+                    >
+                      キャンセル
+                    </button>
+                  </div>
+                ) : (
+                  /* 通常表示モード */
+                  <>
+                    <span className="text-gray-800 font-medium">{task.title}</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleStartEdit(task)}
+                        className="px-3 py-1 bg-gray-100 text-gray-600 text-sm font-medium rounded hover:bg-gray-200"
+                      >
+                        編集
+                      </button>
+                      <button
+                        onClick={() => handleDeleteTask(task.id)}
+                        className="px-3 py-1 bg-red-100 text-red-600 text-sm font-medium rounded hover:bg-red-200"
+                      >
+                        削除
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))
+          )}
         </div>
-      </main>
-    </div>
+      </div>
+    </main>
   );
 }
