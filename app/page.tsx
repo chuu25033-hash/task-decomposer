@@ -198,7 +198,7 @@ export default function Home() {
       <div className="fixed top-[-80px] left-1/2 -translate-x-1/2 w-[850px] h-[350px] bg-gradient-to-tr from-cyan-500/18 via-sky-500/12 to-cyan-400/10 blur-[120px] pointer-events-none -z-10" />
       <div className="fixed bottom-0 right-0 w-[400px] h-[400px] bg-cyan-500/10 blur-[140px] pointer-events-none -z-10" />
 
-      {/* ヘッダーエリア */}
+      {/* ヘッダーエリア（スッキリ化版） */}
       <header className="bg-[#141721]/80 backdrop-blur-2xl border-b border-cyan-500/20 sticky top-0 z-20 shadow-xl shadow-black/50">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -211,9 +211,6 @@ export default function Home() {
               </h1>
             </div>
           </div>
-          <span className="text-[10px] font-bold tracking-widest uppercase px-3 py-1 rounded-full bg-cyan-950/60 text-cyan-400 border border-cyan-500/40 shadow-[0_0_10px_rgba(6,182,212,0.2)]">
-            SYSTEM READY
-          </span>
         </div>
       </header>
 
@@ -360,7 +357,7 @@ export default function Home() {
 
                   {/* サブタスク表示エリア */}
                   {isDecomposing ? (
-                    /* 【手法A】サイバースケルトンUI（生成中骨組みアニメーション） */
+                    /* スケルトンUI（生成中骨組みアニメーション） */
                     <div className="space-y-2 mb-4">
                       {Array.from({ length: selectedCount }).map((_, idx) => (
                         <div
