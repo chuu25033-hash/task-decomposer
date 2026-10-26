@@ -54,6 +54,8 @@ app/
   - AI提案を内容変更して保存すると `"user"` に変わる
 - 永続化は **LocalStorage**（キー: `task_decomposer_tasks`）。バックエンド DB は無い
   - `isLoaded` フラグで初回復元前の上書き保存を防いでいる
+  - タスクは**新しい順**（追加時に先頭へ）。旧バージョンの古い順データは `task_decomposer_task_order` が `"newest-first"` でなければ初回読み込み時に一度だけ反転する
+  - 追加直後のカードは `recentlyAddedId` で `animate-slide-in` + `animate-cyber-pulse` を付けて強調
 - ID は `crypto.randomUUID()` で生成
 - AIボタンは `getAiPlan` で3つの動作を切り替える（**タスク総数を勝手に増やさない**のが方針）
   - `decompose`（AI分解）: サブタスク無し → 粒度チップ（1/3/5/10）の個数で分解

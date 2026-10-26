@@ -34,6 +34,11 @@ const AI_MODE_DESCRIPTIONS: Record<AiMode, string> = {
   append: "完了済みの続きから、次に取り組むアクションをAIが追加します",
 };
 
+// LocalStorage のキー
+const TASKS_KEY = "task_decomposer_tasks";
+// タスクの並び順の形式（旧バージョンの古い順データを一度だけ新しい順に揃えるための目印）
+const TASK_ORDER_KEY = "task_decomposer_task_order";
+
 // 1回で生成できる最大個数（API 側の上限と合わせる）
 const MAX_AI_COUNT = 10;
 
@@ -64,18 +69,25 @@ export default function Home() {
   const [apiKey, setApiKey] = useState<StoredApiKey | null>(null);
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
   const [keyModalReason, setKeyModalReason] = useState<string | null>(null);
+  const [recentlyAddedId, setRecentlyAddedId] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
   // 初回レンダリング時に LocalStorage から復元
   useEffect(() => {
-    const savedTasks = localStorage.getItem("task_decomposer_tasks");
+    const savedTasks = localStorage.getItem(TASKS_KEY);
     if (savedTasks) {
       try {
         // 分解中にリロードされた場合に備え、isDecomposing は復元しない
-        const restored: Task[] = JSON.parse(savedTasks).map((t: Task) => ({
+        let restored: Task[] = JSON.parse(savedTasks).map((t: Task) => ({
           ...t,
           isDecomposing: false,
         }));
+        // 旧バージョンは古い順（末尾に追加）で保存していたため、一度だけ新しい順に並べ替える
+        // （Strict Mode で effect が2回走っても二重に反転しないよう、並べ替えた結果をすぐ保存する）
+        if (localStorage.getItem(TASK_ORDER_KEY) !== "newest-first") {
+          restored = [...restored].reverse();
+          localStorage.setItem(TASKS_KEY, JSON.stringify(restored));
+        }
         // 静的生成された HTML とのハイドレーション不一致を避けるため、マウント後に復元する
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setTasks(restored);
@@ -83,6 +95,7 @@ export default function Home() {
         console.error("Failed to load tasks from LocalStorage", e);
       }
     }
+    localStorage.setItem(TASK_ORDER_KEY, "newest-first");
     // 期限切れのキーは loadApiKey が null を返す
     setApiKey(loadApiKey());
     setIsLoaded(true);
@@ -91,7 +104,7 @@ export default function Home() {
   // tasks 変更時に LocalStorage に自動保存
   useEffect(() => {
     if (isLoaded) {
-      localStorage.setItem("task_decomposer_tasks", JSON.stringify(tasks));
+      localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
     }
   }, [tasks, isLoaded]);
 
@@ -103,8 +116,15 @@ export default function Home() {
       title: newTaskTitle,
       subtasks: [],
     };
-    setTasks([...tasks, newTask]);
+    // 入力欄のすぐ下に出るよう先頭に追加する（新しい順）
+    setTasks([newTask, ...tasks]);
     setNewTaskTitle("");
+    // どこに追加されたか分かるよう、少しの間カードを光らせる
+    setRecentlyAddedId(newTask.id);
+    setTimeout(
+      () => setRecentlyAddedId((id) => (id === newTask.id ? null : id)),
+      1800
+    );
   };
 
   // タスク削除（サブタスクがある場合は誤操作防止のため確認する）
@@ -567,6 +587,8 @@ export default function Home() {
                   className={`bg-[#141721] rounded-2xl p-6 shadow-xl border border-slate-800/80 transition-all ${
                     isDecomposing
                       ? "animate-cyber-scan animate-cyber-pulse border-cyan-500/60 shadow-[0_0_20px_rgba(6,182,212,0.4)]"
+                      : task.id === recentlyAddedId
+                      ? "animate-slide-in animate-cyber-pulse"
                       : "hover:border-cyan-500/40 cyber-glow"
                   }`}
                 >

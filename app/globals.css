@@ -80,3 +80,15 @@
   animation: cyber-scan 3s infinite linear;
   pointer-events: none; /* コンテンツのクリックを邪魔しない */
 }
+/* 新しく追加したタスクカードが上からすっと現れる */
+@keyframes slide-in {
+  0% { opacity: 0; transform: translateY(-12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+/* animate-cyber-pulse と併用するため animation を複数指定する */
+.animate-slide-in.animate-cyber-pulse {
+  animation:
+    slide-in 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    cyber-pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1);
+}
