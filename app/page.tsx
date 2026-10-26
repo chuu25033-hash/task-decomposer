@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import ApiKeyModal from "@/app/components/ApiKeyModal";
 import { clearApiKey, loadApiKey, type StoredApiKey } from "@/app/lib/apiKeyStorage";
 import { API_KEY_HEADER, ERROR_CODES } from "@/app/lib/gemini";
-import { isReplaceableByAi, type Subtask, type Task } from "@/app/types/task";
+import { isReplaceableByAi, MAX_TITLE_LENGTH, type Subtask, type Task } from "@/app/types/task";
 
 // AI呼び出しの失敗（code で APIキー起因かどうかを判別する）
 class AiRequestError extends Error {
@@ -39,6 +39,19 @@ const TASKS_KEY = "task_decomposer_tasks";
 // タスクの並び順の形式（旧バージョンの古い順データを一度だけ新しい順に揃えるための目印）
 const TASK_ORDER_KEY = "task_decomposer_task_order";
 
+// 「とりあえずこれだけやる」集中タイマーの長さ（AIが提案する1アクションの目安と合わせる）
+const FOCUS_MINUTES = 10;
+const EXTEND_MINUTES = 5;
+const APP_TITLE = "TaskDecomposer";
+
+// ミリ秒を MM:SS 表記にする
+const formatRemaining = (ms: number) => {
+  const totalSeconds = Math.ceil(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+};
+
 // 1回で生成できる最大個数（API 側の上限と合わせる）
 const MAX_AI_COUNT = 10;
 
@@ -70,6 +83,11 @@ export default function Home() {
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
   const [keyModalReason, setKeyModalReason] = useState<string | null>(null);
   const [recentlyAddedId, setRecentlyAddedId] = useState<string | null>(null);
+  // 集中タイマー（同時に1つだけ。保存不要）
+  const [focusTimer, setFocusTimer] = useState<{ subtaskId: string; endsAt: number } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  // すべて完了して折りたたまれたタスクのうち、開いているもの
+  const [expandedTaskIds, setExpandedTaskIds] = useState<string[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
   // 初回レンダリング時に LocalStorage から復元
@@ -171,10 +189,63 @@ export default function Home() {
     setNewSubtaskInputs({ ...newSubtaskInputs, [taskId]: "" });
   };
 
+  // 集中タイマーのカウントダウン
+  useEffect(() => {
+    if (!focusTimer) return;
+    const intervalId = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(intervalId);
+  }, [focusTimer]);
+
+  // 別タブを見ていても残り時間が分かるよう、タブのタイトルに表示する
+  useEffect(() => {
+    if (!focusTimer) {
+      document.title = APP_TITLE;
+      return;
+    }
+    const remaining = focusTimer.endsAt - now;
+    document.title = remaining > 0 ? `⏱ ${formatRemaining(remaining)} - ${APP_TITLE}` : `⏰ 時間です - ${APP_TITLE}`;
+  }, [focusTimer, now]);
+
+  const startFocusTimer = (subtaskId: string, minutes: number) => {
+    const startedAt = Date.now();
+    setNow(startedAt);
+    setFocusTimer({ subtaskId, endsAt: startedAt + minutes * 60 * 1000 });
+  };
+
+  const stopFocusTimer = () => setFocusTimer(null);
+
+  // AIの置き換えなどで取り組んでいたサブタスクが消えた場合はタイマーを止める
+  const stopFocusTimerIfRemoved = (removedIds: string[]) => {
+    setFocusTimer((timer) => (timer && removedIds.includes(timer.subtaskId) ? null : timer));
+  };
+
+  // サブタスクの並べ替え（direction: -1 で上へ、1 で下へ）
+  const moveSubtask = (taskId: string, subtaskId: string, direction: -1 | 1) => {
+    setTasks((prev) =>
+      prev.map((task) => {
+        if (task.id !== taskId) return task;
+        const index = task.subtasks.findIndex((s) => s.id === subtaskId);
+        const target = index + direction;
+        if (index === -1 || target < 0 || target >= task.subtasks.length) return task;
+        const subtasks = [...task.subtasks];
+        [subtasks[index], subtasks[target]] = [subtasks[target], subtasks[index]];
+        return { ...task, subtasks };
+      })
+    );
+  };
+
+  const toggleTaskExpanded = (taskId: string) => {
+    setExpandedTaskIds((prev) =>
+      prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]
+    );
+  };
+
   // サブタスク完了チェック切り替え
   const toggleSubtask = (taskId: string, subtaskId: string) => {
     setLastCheckedId(subtaskId);
     setTimeout(() => setLastCheckedId(null), 300);
+    // 取り組んでいたサブタスクを完了したらタイマーを止める
+    if (focusTimer?.subtaskId === subtaskId) stopFocusTimer();
 
     setTasks(
       tasks.map((task) => {
@@ -194,6 +265,7 @@ export default function Home() {
 
   // サブタスク削除
   const deleteSubtask = (taskId: string, subtaskId: string) => {
+    if (focusTimer?.subtaskId === subtaskId) stopFocusTimer();
     setTasks(
       tasks.map((task) => {
         if (task.id === taskId) {
@@ -389,6 +461,7 @@ export default function Home() {
         )
       );
       if (removed.length > 0) {
+        stopFocusTimerIfRemoved(removed.map((s) => s.id));
         setUndoState(task.id, {
           removed,
           addedIds: generatedSubtasks.map((s) => s.id),
@@ -437,6 +510,7 @@ export default function Home() {
           };
         })
       );
+      stopFocusTimerIfRemoved([subtask.id]);
     } catch (e) {
       handleAiError(task.id, e, "AIの細分化に失敗しました。少し時間をおいて再試行してください。");
     } finally {
@@ -524,6 +598,7 @@ export default function Home() {
             onChange={(e) => setNewTaskTitle(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && addTask()}
             placeholder="大きなタスクを入力... (例: レポートを提出する)"
+            maxLength={MAX_TITLE_LENGTH}
             className="flex-1 px-4 py-3 text-slate-100 placeholder-slate-500 bg-transparent focus:outline-none text-sm font-medium tracking-wide"
           />
           <button
@@ -580,6 +655,9 @@ export default function Home() {
               const nextSubtaskId = task.subtasks.find((s) => !s.completed)?.id;
               const taskError = taskErrors[task.id];
               const undoState = undoStates[task.id];
+              // すべて完了したタスクは折りたたんで一覧をすっきりさせる（AI処理中は除く）
+              const isCollapsed =
+                isAllCompleted && !isDecomposing && !expandedTaskIds.includes(task.id);
 
               return (
                 <div
@@ -598,6 +676,7 @@ export default function Home() {
                       <input
                         type="text"
                         value={editingTask.title}
+                        maxLength={MAX_TITLE_LENGTH}
                         onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value })}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") saveTaskEdit();
@@ -735,14 +814,35 @@ export default function Home() {
                     </div>
                   )}
 
+                  {/* 完了タスクの折りたたみ切り替え */}
+                  {isAllCompleted && !isDecomposing && (
+                    <button
+                      onClick={() => toggleTaskExpanded(task.id)}
+                      className={`w-full text-xs font-mono text-slate-400 hover:text-cyan-300 transition-colors py-1 ${
+                        isCollapsed ? "" : "mb-4"
+                      }`}
+                    >
+                      {isCollapsed ? `▼ 手順を表示（${totalCount}件）` : "▲ 折りたたむ"}
+                    </button>
+                  )}
+
+                  {!isCollapsed && (
+                  <>
+
                   {/* サブタスク表示エリア（手動整理した内容は分解中も表示し続ける） */}
                   <div className="space-y-2 mb-4">
-                      {task.subtasks.map((subtask) => {
+                      {task.subtasks.map((subtask, index) => {
                         const isNext = subtask.id === nextSubtaskId;
                         const isBreakingDown = breakingDownIds.includes(subtask.id);
                         const isAi = subtask.source === "ai";
                         // AI再提案中は、置き換わる予定のAI提案を薄く表示する
                         const willBeReplaced = isDecomposing && isReplaceableByAi(subtask);
+                        const isEditing = editingSubtask?.subtaskId === subtask.id;
+                        // 集中タイマー：NEXT から開始できる（同時に1つだけ）
+                        const isTimerTarget = focusTimer?.subtaskId === subtask.id;
+                        const timerRemaining = isTimerTarget ? focusTimer.endsAt - now : 0;
+                        const canStartTimer =
+                          isNext && !focusTimer && !isBreakingDown && !isDecomposing && !isEditing;
                         return (
                         <div
                           key={subtask.id}
@@ -772,6 +872,7 @@ export default function Home() {
                               <input
                                 type="text"
                                 value={editingSubtask.title}
+                                maxLength={MAX_TITLE_LENGTH}
                                 onChange={(e) =>
                                   setEditingSubtask({
                                     ...editingSubtask,
@@ -783,6 +884,7 @@ export default function Home() {
                                 autoFocus
                               />
                             ) : (
+                              <div className="flex-1 min-w-0">
                               <span
                                 className={`text-sm transition-all duration-300 ${
                                   subtask.completed
@@ -805,6 +907,54 @@ export default function Home() {
                                 )}
                                 {subtask.title}
                               </span>
+
+                              {/* 集中タイマー */}
+                              {canStartTimer && (
+                                <button
+                                  onClick={() => startFocusTimer(subtask.id, FOCUS_MINUTES)}
+                                  className="mt-2 flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-lg bg-cyan-400 text-black hover:bg-cyan-300 transition-all active:scale-95"
+                                  title={`まずは${FOCUS_MINUTES}分だけ、これに集中してみましょう`}
+                                >
+                                  ▶ {FOCUS_MINUTES}分だけやる
+                                </button>
+                              )}
+                              {isTimerTarget && timerRemaining > 0 && (
+                                <div className="mt-2 flex items-center gap-2">
+                                  <span className="font-mono text-sm font-black text-cyan-300 tabular-nums drop-shadow-[0_0_6px_rgba(6,182,212,0.6)]">
+                                    ⏱ {formatRemaining(timerRemaining)}
+                                  </span>
+                                  <button
+                                    onClick={stopFocusTimer}
+                                    className="text-xs font-mono text-slate-400 hover:text-rose-300 px-2 py-0.5 rounded border border-slate-700"
+                                  >
+                                    ■ 止める
+                                  </button>
+                                </div>
+                              )}
+                              {isTimerTarget && timerRemaining <= 0 && (
+                                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                  <span className="font-bold text-cyan-300">⏰ {FOCUS_MINUTES}分経過！</span>
+                                  <button
+                                    onClick={() => toggleSubtask(task.id, subtask.id)}
+                                    className="font-bold px-3 py-1 rounded-lg bg-cyan-400 text-black hover:bg-cyan-300 active:scale-95"
+                                  >
+                                    ✓ 完了にする
+                                  </button>
+                                  <button
+                                    onClick={() => startFocusTimer(subtask.id, EXTEND_MINUTES)}
+                                    className="font-mono px-2 py-1 rounded-lg border border-cyan-500/40 text-cyan-300 hover:bg-cyan-950/50"
+                                  >
+                                    +{EXTEND_MINUTES}分
+                                  </button>
+                                  <button
+                                    onClick={stopFocusTimer}
+                                    className="font-mono text-slate-500 hover:text-slate-300 px-1"
+                                  >
+                                    終了
+                                  </button>
+                                </div>
+                              )}
+                              </div>
                             )}
                           </div>
 
@@ -824,7 +974,28 @@ export default function Home() {
                                 ⚡
                               </button>
                             )}
-                            {editingSubtask?.subtaskId === subtask.id ? (
+                            {/* 並べ替え */}
+                            {!isEditing && (
+                              <>
+                                <button
+                                  onClick={() => moveSubtask(task.id, subtask.id, -1)}
+                                  disabled={index === 0}
+                                  className="text-xs font-mono text-slate-500 hover:text-slate-200 px-1.5 py-1 disabled:opacity-20 disabled:cursor-not-allowed"
+                                  title="上へ移動"
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  onClick={() => moveSubtask(task.id, subtask.id, 1)}
+                                  disabled={index === task.subtasks.length - 1}
+                                  className="text-xs font-mono text-slate-500 hover:text-slate-200 px-1.5 py-1 disabled:opacity-20 disabled:cursor-not-allowed"
+                                  title="下へ移動"
+                                >
+                                  ↓
+                                </button>
+                              </>
+                            )}
+                            {isEditing ? (
                               <button
                                 onClick={saveSubtaskEdit}
                                 className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 px-2 py-1"
@@ -884,6 +1055,7 @@ export default function Home() {
                     <input
                       type="text"
                       placeholder="手順を自分で追加...（詰まったら AI再提案 / ⚡）"
+                      maxLength={MAX_TITLE_LENGTH}
                       value={newSubtaskInputs[task.id] || ""}
                       onChange={(e) =>
                         setNewSubtaskInputs({
@@ -901,6 +1073,8 @@ export default function Home() {
                       + ADD
                     </button>
                   </div>
+                  </>
+                  )}
                 </div>
               );
             })

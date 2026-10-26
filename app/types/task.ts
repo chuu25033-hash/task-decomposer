@@ -13,6 +13,9 @@ export interface Subtask {
   source?: SubtaskSource;
 }
 
+// タスク名・サブタスク名の最大文字数（長すぎる入力で AI の応答が遅く・不安定になるのを防ぐ）
+export const MAX_TITLE_LENGTH = 200;
+
 // AI再提案で作り直す対象（未完了のAI提案）かどうか
 export const isReplaceableByAi = (subtask: Subtask) =>
   subtask.source === "ai" && !subtask.completed;

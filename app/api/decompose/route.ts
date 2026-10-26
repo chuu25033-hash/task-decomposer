@@ -6,6 +6,10 @@ import {
   GEMINI_MODELS,
   isApiKeyError,
 } from "@/app/lib/gemini";
+import { MAX_TITLE_LENGTH } from "@/app/types/task";
+
+// AI に渡す既存サブタスクの最大件数
+const MAX_EXISTING_SUBTASKS = 50;
 
 // Vercel HobbyプランでのAPI最大実行時間を15秒に拡張
 export const maxDuration = 15;
@@ -13,30 +17,38 @@ export const maxDuration = 15;
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const taskTitle: unknown = body.taskTitle;
+    const rawTitle: unknown = body.taskTitle;
     // 生成個数は 1〜10 に制限
     const count = Math.min(Math.max(Number(body.count) || 5, 1), 10);
     // 既存のサブタスク（補完モード用）
+    // 長すぎる入力で応答が遅く・不安定になるのを防ぐため、件数と文字数を切り詰める
     const existingSubtasks: { title: string; completed: boolean }[] = Array.isArray(
       body.existingSubtasks
     )
-      ? body.existingSubtasks.filter(
-          (s: unknown): s is { title: string; completed: boolean } =>
-            typeof s === "object" && s !== null && typeof (s as { title?: unknown }).title === "string"
-        )
+      ? body.existingSubtasks
+          .filter(
+            (s: unknown): s is { title: string; completed: boolean } =>
+              typeof s === "object" && s !== null && typeof (s as { title?: unknown }).title === "string"
+          )
+          .slice(0, MAX_EXISTING_SUBTASKS)
+          .map((s: { title: string; completed: boolean }) => ({
+            title: s.title.slice(0, MAX_TITLE_LENGTH),
+            completed: Boolean(s.completed),
+          }))
       : [];
     // 細分化したいサブタスク（行き詰まったステップ）
     const focusSubtask: string | undefined =
       typeof body.focusSubtask === "string" && body.focusSubtask.trim()
-        ? body.focusSubtask
+        ? body.focusSubtask.slice(0, MAX_TITLE_LENGTH)
         : undefined;
 
-    if (typeof taskTitle !== "string" || !taskTitle.trim()) {
+    if (typeof rawTitle !== "string" || !rawTitle.trim()) {
       return NextResponse.json(
         { error: "taskTitle is required" },
         { status: 400 }
       );
     }
+    const taskTitle = rawTitle.slice(0, MAX_TITLE_LENGTH);
 
     // ユーザー自身が登録した APIキーを使う（サーバー側では保存しない）
     const apiKey = req.headers.get(API_KEY_HEADER)?.trim();
