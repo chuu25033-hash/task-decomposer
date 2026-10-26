@@ -219,6 +219,22 @@ export default function Home() {
     setFocusTimer((timer) => (timer && removedIds.includes(timer.subtaskId) ? null : timer));
   };
 
+  // AI提案の「採用」を切り替える（採用したものは AI再提案 で作り直さない）
+  const toggleKeepSubtask = (taskId: string, subtaskId: string) => {
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              subtasks: task.subtasks.map((s) =>
+                s.id === subtaskId ? { ...s, kept: !s.kept } : s
+              ),
+            }
+          : task
+      )
+    );
+  };
+
   // サブタスクの並べ替え（direction: -1 で上へ、1 で下へ）
   const moveSubtask = (taskId: string, subtaskId: string, direction: -1 | 1) => {
     setTasks((prev) =>
@@ -352,6 +368,7 @@ export default function Home() {
     taskTitle: string;
     count: number;
     existingSubtasks?: { title: string; completed: boolean }[];
+    rejectedSubtasks?: string[];
     focusSubtask?: string;
   }, key: string): Promise<Subtask[]> => {
     const res = await fetch("/api/decompose", {
@@ -439,13 +456,15 @@ export default function Home() {
       const generatedSubtasks = await requestSubtasks({
         taskTitle: task.title,
         count,
-        // 前回のAI案は渡さない（渡すと同じ案が返りやすく、作り直す意味が薄れる）
+        // 完了済み・ユーザーの手順・採用したAI提案は「今の計画」として渡す
         existingSubtasks: task.subtasks
           .filter((s) => !isReplaceableByAi(s))
           .map((s) => ({
             title: s.title,
             completed: s.completed,
           })),
+        // 作り直す（採用されなかった）案は、同じ案が返らないよう「避けるべき案」として渡す
+        rejectedSubtasks: removed.map((s) => s.title),
       }, apiKey.key);
 
       // 処理中にチェック・追加された内容も反映するため、最新の状態から差し替える
@@ -897,14 +916,29 @@ export default function Home() {
                                     NEXT
                                   </span>
                                 )}
-                                {isAi && (
-                                  <span
-                                    className="inline-block mr-2 px-1 rounded border border-cyan-500/30 text-cyan-500/70 text-[10px] font-mono align-middle"
-                                    title="AIの提案（未完了なら AI再提案 で作り直されます。編集すると自分の手順として残ります）"
-                                  >
+                                {isAi && (subtask.completed ? (
+                                  <span className="inline-block mr-2 px-1 rounded border border-cyan-500/30 text-cyan-500/70 text-[10px] font-mono align-middle">
                                     AI
                                   </span>
-                                )}
+                                ) : (
+                                  /* タップで「採用」を切り替え（採用した提案は AI再提案 で作り直さない） */
+                                  <button
+                                    onClick={() => toggleKeepSubtask(task.id, subtask.id)}
+                                    disabled={isDecomposing}
+                                    className={`inline-block mr-2 px-1 rounded border text-[10px] font-mono align-middle transition-all active:scale-95 disabled:cursor-not-allowed ${
+                                      subtask.kept
+                                        ? "border-amber-400/70 bg-amber-400/15 text-amber-300 font-bold"
+                                        : "border-cyan-500/30 text-cyan-500/70 hover:border-cyan-400 hover:text-cyan-300"
+                                    }`}
+                                    title={
+                                      subtask.kept
+                                        ? "採用中：AI再提案でも作り直しません（タップで解除）"
+                                        : "AIの提案：タップで採用すると、AI再提案で作り直されなくなります"
+                                    }
+                                  >
+                                    {subtask.kept ? "📌採用" : "AI"}
+                                  </button>
+                                ))}
                                 {subtask.title}
                               </span>
 

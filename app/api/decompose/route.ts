@@ -36,6 +36,13 @@ export async function POST(req: Request) {
             completed: Boolean(s.completed),
           }))
       : [];
+    // 採用されなかった前回のAI案（AI再提案で、同じ案が返らないようにするため）
+    const rejectedSubtasks: string[] = Array.isArray(body.rejectedSubtasks)
+      ? body.rejectedSubtasks
+          .filter((s: unknown): s is string => typeof s === "string" && s.trim() !== "")
+          .slice(0, MAX_EXISTING_SUBTASKS)
+          .map((s: string) => s.slice(0, MAX_TITLE_LENGTH))
+      : [];
     // 細分化したいサブタスク（行き詰まったステップ）
     const focusSubtask: string | undefined =
       typeof body.focusSubtask === "string" && body.focusSubtask.trim()
@@ -71,6 +78,14 @@ export async function POST(req: Request) {
       .map((s) => `- ${s.completed ? "[完了] " : ""}${s.title}`)
       .join("\n");
 
+    // AI再提案時：ユーザーが採用しなかった案と同じ・似た案が返らないようにする
+    const rejectedNote = rejectedSubtasks.length
+      ? `
+
+以下は前回提案したものの、ユーザーが採用しなかった案です。これらと同じ・言い換えただけの案は避け、別のやり方や切り口で提案してください。
+${rejectedSubtasks.map((s) => `- ${s}`).join("\n")}`
+      : "";
+
     let instruction: string;
     if (focusSubtask) {
       // 行き詰まった1ステップを細分化
@@ -85,10 +100,10 @@ export async function POST(req: Request) {
 ${existingList}
 
 実行済みの作業の続きから、次に取り組むべきアクションを、ユーザーの予定の手順と重複しないように正確に【${count}個】提案してください。
-目標達成まで${count}個で収まらない場合も、1つのアクションを大きくせず、先に取り組むべきものから順に提案してください。`;
+目標達成まで${count}個で収まらない場合も、1つのアクションを大きくせず、先に取り組むべきものから順に提案してください。${rejectedNote}`;
     } else {
       instruction = `タスク:「${taskTitle}」
-上記を即時着手できる超具体的な最小アクションに正確に【${count}個】分解してください。`;
+上記を即時着手できる超具体的な最小アクションに正確に【${count}個】分解してください。${rejectedNote}`;
     }
 
     const prompt = `${instruction}

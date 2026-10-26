@@ -61,8 +61,9 @@ app/
   - `decompose`（AI分解）: サブタスク無し → 粒度チップ（1/3/5/10）の個数で分解
   - `regenerate`（AI再提案）: 未完了のAI提案あり → **その個数のまま**作り直す（粒度チップは隠し「残りN個」と表示）
   - `append`（AI追加）: AI提案がすべて完了済み → 粒度チップの個数だけ次の手順を末尾に追加
-- 再提案では**未完了のAI提案（`isReplaceableByAi`）だけを置き換える**。完了済み・ユーザーの手順は残す
-  - API には完了済み＋ユーザーの手順のみ送る（前回のAI案は送らない）。新しい提案は最初に置き換えたAI提案の位置に挿入（`replaceAiSubtasks`）
+- 再提案では**未完了で採用していないAI提案（`isReplaceableByAi`）だけを置き換える**。完了済み・ユーザーの手順・採用したAI提案は残す
+  - AI提案の「AI」バッジをタップすると「📌採用」（`Subtask.kept`、永続）に切り替わる。気に入った提案だけ残して他を作り直せる
+  - API には完了済み＋ユーザーの手順＋採用した提案を `existingSubtasks` として、作り直す提案を `rejectedSubtasks` として送り、同じ案が返らないようにする。新しい提案は最初に置き換えたAI提案の位置に挿入（`replaceAiSubtasks`）
   - 置き換えた内容は `undoStates`（非永続）に控え、「元に戻す」で復元できる
   - 分解中は `isDecomposing` で、置き換え予定のAI提案を薄く表示し、一覧の下にスケルトン表示
 - サブタスクの ⚡ で `focusSubtask` を送り、そのサブタスクを生成結果（3個）に**差し替える**。処理中の ID は `breakingDownIds`（非永続）で管理
@@ -79,7 +80,7 @@ app/
 - `INVALID_API_KEY` が返ったらキーを破棄して登録モーダルを再表示。`RATE_LIMITED`（429）は無料枠の上限としてカード内に表示
 
 ### API（`app/api/decompose/route.ts`）
-- リクエスト: `{ taskTitle: string, count?: number, existingSubtasks?: { title, completed }[], focusSubtask?: string }`（count 既定値 5、1〜10 に制限）
+- リクエスト: `{ taskTitle: string, count?: number, existingSubtasks?: { title, completed }[], rejectedSubtasks?: string[], focusSubtask?: string }`（count 既定値 5、1〜10 に制限）
   - `focusSubtask` あり → その手順を細分化 / `existingSubtasks` あり → 完了済みの続きから、ユーザーの手順と重複しない「次に取り組む N 個」を提案（個数が少なくても1つを大きくしない） / どちらも無し → 一から分解
   - いずれも「10分以内で終わる・動詞で終わる具体的な行動」を条件としてプロンプトに含める
 - ヘッダー: `x-gemini-api-key`（必須）
