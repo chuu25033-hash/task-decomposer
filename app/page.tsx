@@ -1,20 +1,50 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import ApiKeyModal from "@/app/components/ApiKeyModal";
+import { clearApiKey, loadApiKey, type StoredApiKey } from "@/app/lib/apiKeyStorage";
+import { API_KEY_HEADER, ERROR_CODES } from "@/app/lib/gemini";
+import { isReplaceableByAi, type Subtask, type Task } from "@/app/types/task";
 
-// 型定義
-export interface Subtask {
-  id: string;
-  title: string;
-  completed: boolean;
+// AI呼び出しの失敗（code で APIキー起因かどうかを判別する）
+class AiRequestError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.code = code;
+  }
 }
 
-export interface Task {
-  id: string;
-  title: string;
-  subtasks: Subtask[];
-  isDecomposing?: boolean;
-}
+// AIボタンの動作
+// - decompose:  サブタスクが無い → 選択した個数で一から分解
+// - regenerate: 未完了のAI提案がある → その個数のまま作り直す（総数を増やさない）
+// - append:     AI提案をすべて完了済み → 選択した個数だけ次の手順を追加
+type AiMode = "decompose" | "regenerate" | "append";
+
+const AI_MODE_LABELS: Record<AiMode, string> = {
+  decompose: "AI分解",
+  regenerate: "AI再提案",
+  append: "AI追加",
+};
+
+const AI_MODE_DESCRIPTIONS: Record<AiMode, string> = {
+  decompose: "タスクをAIが10分でできるアクションに分解します",
+  regenerate:
+    "完了済みと自分で追加した手順は残し、未完了のAI提案を同じ個数のまま今の進み具合に合わせて作り直します",
+  append: "完了済みの続きから、次に取り組むアクションをAIが追加します",
+};
+
+// 1回で生成できる最大個数（API 側の上限と合わせる）
+const MAX_AI_COUNT = 10;
+
+const getAiPlan = (task: Task, selectedCount: number): { mode: AiMode; count: number } => {
+  if (task.subtasks.length === 0) return { mode: "decompose", count: selectedCount };
+  const replaceableCount = task.subtasks.filter(isReplaceableByAi).length;
+  if (replaceableCount > 0) {
+    return { mode: "regenerate", count: Math.min(replaceableCount, MAX_AI_COUNT) };
+  }
+  return { mode: "append", count: selectedCount };
+};
 
 export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -23,6 +53,17 @@ export default function Home() {
   const [editingSubtask, setEditingSubtask] = useState<{ taskId: string; subtaskId: string; title: string } | null>(null);
   const [lastCheckedId, setLastCheckedId] = useState<string | null>(null);
   const [decomposeCounts, setDecomposeCounts] = useState<{ [key: string]: number }>({});
+  const [editingTask, setEditingTask] = useState<{ id: string; title: string } | null>(null);
+  // AIで細分化中のサブタスクID（保存不要なのでタスクとは別に管理）
+  const [breakingDownIds, setBreakingDownIds] = useState<string[]>([]);
+  const [taskErrors, setTaskErrors] = useState<{ [key: string]: string | null }>({});
+  // AI再提案の「元に戻す」用（置き換えたAI提案と、新たに追加したサブタスクID。保存不要）
+  const [undoStates, setUndoStates] = useState<{
+    [key: string]: { removed: Subtask[]; addedIds: string[] } | null;
+  }>({});
+  const [apiKey, setApiKey] = useState<StoredApiKey | null>(null);
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  const [keyModalReason, setKeyModalReason] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
   // 初回レンダリング時に LocalStorage から復元
@@ -30,11 +71,20 @@ export default function Home() {
     const savedTasks = localStorage.getItem("task_decomposer_tasks");
     if (savedTasks) {
       try {
-        setTasks(JSON.parse(savedTasks));
+        // 分解中にリロードされた場合に備え、isDecomposing は復元しない
+        const restored: Task[] = JSON.parse(savedTasks).map((t: Task) => ({
+          ...t,
+          isDecomposing: false,
+        }));
+        // 静的生成された HTML とのハイドレーション不一致を避けるため、マウント後に復元する
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setTasks(restored);
       } catch (e) {
         console.error("Failed to load tasks from LocalStorage", e);
       }
     }
+    // 期限切れのキーは loadApiKey が null を返す
+    setApiKey(loadApiKey());
     setIsLoaded(true);
   }, []);
 
@@ -57,9 +107,25 @@ export default function Home() {
     setNewTaskTitle("");
   };
 
-  // タスク削除
-  const deleteTask = (taskId: string) => {
-    setTasks(tasks.filter((task) => task.id !== taskId));
+  // タスク削除（サブタスクがある場合は誤操作防止のため確認する）
+  const deleteTask = (task: Task) => {
+    if (task.subtasks.length > 0 && !window.confirm(`「${task.title}」を削除しますか？`)) {
+      return;
+    }
+    setTasks(tasks.filter((t) => t.id !== task.id));
+  };
+
+  // タスク名編集保存
+  const saveTaskEdit = () => {
+    if (!editingTask) return;
+    if (editingTask.title.trim()) {
+      setTasks(
+        tasks.map((task) =>
+          task.id === editingTask.id ? { ...task, title: editingTask.title } : task
+        )
+      );
+    }
+    setEditingTask(null);
   };
 
   // 手動サブタスク追加
@@ -74,6 +140,7 @@ export default function Home() {
             id: crypto.randomUUID(),
             title: inputTitle,
             completed: false,
+            source: "user",
           };
           return { ...task, subtasks: [...task.subtasks, newSubtask] };
         }
@@ -123,12 +190,22 @@ export default function Home() {
   // サブタスク編集保存
   const saveSubtaskEdit = () => {
     if (!editingSubtask) return;
+    if (!editingSubtask.title.trim()) {
+      setEditingSubtask(null);
+      return;
+    }
     setTasks(
       tasks.map((task) => {
         if (task.id === editingSubtask.taskId) {
           const updatedSubtasks = task.subtasks.map((sub) => {
             if (sub.id === editingSubtask.subtaskId) {
-              return { ...sub, title: editingSubtask.title };
+              // 内容を変えた AI 提案はユーザーの手順として扱い、AI再提案で消さない
+              const isChanged = sub.title !== editingSubtask.title;
+              return {
+                ...sub,
+                title: editingSubtask.title,
+                source: isChanged ? "user" : sub.source,
+              };
             }
             return sub;
           });
@@ -140,50 +217,210 @@ export default function Home() {
     setEditingSubtask(null);
   };
 
-  // AI分解呼び出し
-  const decomposeTask = async (taskId: string, title: string) => {
-    const count = decomposeCounts[taskId] || 5;
+  const setTaskError = (taskId: string, message: string | null) => {
+    setTaskErrors((prev) => ({ ...prev, [taskId]: message }));
+  };
+
+  const openKeyModal = (reason: string | null = null) => {
+    setKeyModalReason(reason);
+    setIsKeyModalOpen(true);
+  };
+
+  const closeKeyModal = useCallback(() => {
+    setIsKeyModalOpen(false);
+    setKeyModalReason(null);
+  }, []);
+
+  const removeApiKey = () => {
+    clearApiKey();
+    setApiKey(null);
+  };
+
+  // AI呼び出し失敗時の共通処理
+  const handleAiError = (taskId: string, e: unknown, fallbackMessage: string) => {
+    console.error("AI呼び出しに失敗しました:", e);
+    const code = e instanceof AiRequestError ? e.code : undefined;
+
+    if (code === ERROR_CODES.INVALID_API_KEY || code === ERROR_CODES.API_KEY_REQUIRED) {
+      // 使えなくなったキーは破棄して再登録を促す
+      removeApiKey();
+      setTaskError(taskId, "APIキーが無効になっています。再登録してから、もう一度お試しください。");
+      openKeyModal("登録されていたAPIキーが使えなくなりました。お手数ですが、もう一度登録してください。");
+      return;
+    }
+    if (code === ERROR_CODES.RATE_LIMITED) {
+      setTaskError(taskId, "Gemini の無料枠の利用上限に達しました。しばらく待ってから再試行してください。");
+      return;
+    }
+    setTaskError(taskId, fallbackMessage);
+  };
+
+  // /api/decompose を呼び出し、生成されたサブタスクを返す（失敗時は例外）
+  const requestSubtasks = async (payload: {
+    taskTitle: string;
+    count: number;
+    existingSubtasks?: { title: string; completed: boolean }[];
+    focusSubtask?: string;
+  }, key: string): Promise<Subtask[]> => {
+    const res = await fetch("/api/decompose", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", [API_KEY_HEADER]: key },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || !Array.isArray(data.subtasks) || data.subtasks.length === 0) {
+      throw new AiRequestError(data.error ?? `HTTP ${res.status}`, data.code);
+    }
+
+    return data.subtasks.map((subTitle: string) => ({
+      id: crypto.randomUUID(),
+      title: subTitle,
+      completed: false,
+      source: "ai",
+    }));
+  };
+
+  const setUndoState = (
+    taskId: string,
+    state: { removed: Subtask[]; addedIds: string[] } | null
+  ) => {
+    setUndoStates((prev) => ({ ...prev, [taskId]: state }));
+  };
+
+  // 未完了のAI提案を新しい提案に置き換える
+  // 新しい提案は、最初に置き換えたAI提案の位置に入れる（無ければ末尾）
+  const replaceAiSubtasks = (subtasks: Subtask[], generated: Subtask[]) => {
+    const firstIndex = subtasks.findIndex(isReplaceableByAi);
+    const kept = subtasks.filter((s) => !isReplaceableByAi(s));
+    const insertAt =
+      firstIndex === -1
+        ? kept.length
+        : subtasks.slice(0, firstIndex).filter((s) => !isReplaceableByAi(s)).length;
+    return [...kept.slice(0, insertAt), ...generated, ...kept.slice(insertAt)];
+  };
+
+  // AI再提案を取り消し、置き換える前のAI提案に戻す
+  const undoRegenerate = (taskId: string) => {
+    const undo = undoStates[taskId];
+    if (!undo) return;
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id !== taskId) return t;
+        const firstIndex = t.subtasks.findIndex((s) => undo.addedIds.includes(s.id));
+        const remaining = t.subtasks.filter((s) => !undo.addedIds.includes(s.id));
+        const remainingIds = new Set(remaining.map((s) => s.id));
+        // 処理中に完了にされて残ったものは二重に戻さない
+        const restore = undo.removed.filter((s) => !remainingIds.has(s.id));
+        const insertAt = firstIndex === -1 ? remaining.length : firstIndex;
+        return {
+          ...t,
+          subtasks: [...remaining.slice(0, insertAt), ...restore, ...remaining.slice(insertAt)],
+        };
+      })
+    );
+    setUndoState(taskId, null);
+  };
+
+  // AI分解 / AI再提案 / AI追加（動作の切り替えは getAiPlan を参照）
+  // 完了済み・ユーザーの手順は残し、未完了のAI提案だけを同じ個数の新しい提案に作り直す
+  // （再提案のたびにサブタスクが増え続けるのを防ぐ）
+  const decomposeTask = async (task: Task) => {
+    // APIキー未登録なら先に登録してもらう
+    if (!apiKey) {
+      openKeyModal();
+      return;
+    }
+    const { count } = getAiPlan(task, decomposeCounts[task.id] || 5);
+    setTaskError(task.id, null);
+    setUndoState(task.id, null);
+    // 作り直し対象（元に戻す用に控えておく）
+    const removed = task.subtasks.filter(isReplaceableByAi);
 
     // 分解開始状態にする（スケルトン表示用）
-    setTasks(
-      tasks.map((t) => (t.id === taskId ? { ...t, isDecomposing: true } : t))
+    // 並行して分解した他タスクの結果を上書きしないよう、常に最新の状態から更新する
+    setTasks((prev) =>
+      prev.map((t) => (t.id === task.id ? { ...t, isDecomposing: true } : t))
     );
 
     try {
-      const res = await fetch("/api/decompose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taskTitle: title, count }),
-      });
-      const data = await res.json();
+      const generatedSubtasks = await requestSubtasks({
+        taskTitle: task.title,
+        count,
+        // 前回のAI案は渡さない（渡すと同じ案が返りやすく、作り直す意味が薄れる）
+        existingSubtasks: task.subtasks
+          .filter((s) => !isReplaceableByAi(s))
+          .map((s) => ({
+            title: s.title,
+            completed: s.completed,
+          })),
+      }, apiKey.key);
 
-      if (data.subtasks) {
-        const generatedSubtasks: Subtask[] = data.subtasks.map(
-          (subTitle: string) => ({
-            id: crypto.randomUUID(),
-            title: subTitle,
-            completed: false,
-          })
-        );
-
-        setTasks(
-          tasks.map((t) => {
-            if (t.id === taskId) {
-              return {
+      // 処理中にチェック・追加された内容も反映するため、最新の状態から差し替える
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === task.id
+            ? {
                 ...t,
-                subtasks: generatedSubtasks,
+                subtasks: replaceAiSubtasks(t.subtasks, generatedSubtasks),
                 isDecomposing: false, // 分解完了
-              };
-            }
-            return t;
-          })
-        );
-      }
-    } catch {
-      // エラー時も分解状態を解除
-      setTasks(
-        tasks.map((t) => (t.id === taskId ? { ...t, isDecomposing: false } : t))
+              }
+            : t
+        )
       );
+      if (removed.length > 0) {
+        setUndoState(task.id, {
+          removed,
+          addedIds: generatedSubtasks.map((s) => s.id),
+        });
+      }
+      return;
+    } catch (e) {
+      handleAiError(task.id, e, "AIの提案に失敗しました。少し時間をおいて再試行してください。");
+    }
+
+    // エラー時（APIエラー・通信失敗）は分解状態を解除
+    setTasks((prev) =>
+      prev.map((t) => (t.id === task.id ? { ...t, isDecomposing: false } : t))
+    );
+  };
+
+  // 行き詰まったサブタスクを、10分でできるアクションに細分化して差し替える
+  const breakDownSubtask = async (task: Task, subtask: Subtask) => {
+    if (!apiKey) {
+      openKeyModal();
+      return;
+    }
+    setTaskError(task.id, null);
+    setBreakingDownIds((prev) => [...prev, subtask.id]);
+
+    try {
+      const generatedSubtasks = await requestSubtasks({
+        taskTitle: task.title,
+        count: 3,
+        focusSubtask: subtask.title,
+      }, apiKey.key);
+
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== task.id) return t;
+          const index = t.subtasks.findIndex((s) => s.id === subtask.id);
+          // 処理中に削除された場合は何もしない
+          if (index === -1) return t;
+          return {
+            ...t,
+            subtasks: [
+              ...t.subtasks.slice(0, index),
+              ...generatedSubtasks,
+              ...t.subtasks.slice(index + 1),
+            ],
+          };
+        })
+      );
+    } catch (e) {
+      handleAiError(task.id, e, "AIの細分化に失敗しました。少し時間をおいて再試行してください。");
+    } finally {
+      setBreakingDownIds((prev) => prev.filter((id) => id !== subtask.id));
     }
   };
 
@@ -211,8 +448,41 @@ export default function Home() {
               </h1>
             </div>
           </div>
+
+          {/* APIキー登録状態 */}
+          {isLoaded && (
+            <button
+              onClick={() => openKeyModal()}
+              className={`flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl border transition-all active:scale-95 ${
+                apiKey
+                  ? "border-slate-700 text-slate-300 hover:border-cyan-500/60 hover:text-cyan-200"
+                  : "border-rose-500/50 text-rose-300 hover:bg-rose-950/40"
+              }`}
+              title="Gemini APIキーの設定"
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  apiKey ? "bg-cyan-400 shadow-[0_0_6px_rgba(6,182,212,0.9)]" : "bg-rose-400 animate-pulse"
+                }`}
+              />
+              {apiKey ? "APIキー登録済み" : "APIキー未登録"}
+            </button>
+          )}
         </div>
       </header>
+
+      {isKeyModalOpen && (
+        <ApiKeyModal
+          current={apiKey}
+          reason={keyModalReason}
+          onSaved={(stored) => {
+            setApiKey(stored);
+            closeKeyModal();
+          }}
+          onClear={removeApiKey}
+          onClose={closeKeyModal}
+        />
+      )}
 
       {/* メインコンテンツ */}
       <main className="max-w-2xl mx-auto px-4 sm:px-6 py-12">
@@ -244,6 +514,21 @@ export default function Home() {
           </button>
         </section>
 
+        {/* APIキー未登録の案内 */}
+        {isLoaded && !apiKey && (
+          <div className="-mt-6 mb-10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-cyan-950/20 border border-cyan-500/30 rounded-2xl px-4 py-3">
+            <p className="text-xs text-slate-300 leading-relaxed">
+              AI分解を使うには、無料の <span className="font-bold text-cyan-300">Gemini APIキー</span> の登録が必要です（1分ほど・初回のみ）。
+            </p>
+            <button
+              onClick={() => openKeyModal()}
+              className="text-xs font-black px-4 py-2 rounded-xl bg-cyan-400 text-black hover:bg-cyan-300 transition-all shrink-0 active:scale-95"
+            >
+              登録する
+            </button>
+          </div>
+        )}
+
         {/* タスクカード一覧 */}
         <div className="space-y-6">
           {!isLoaded ? (
@@ -269,7 +554,12 @@ export default function Home() {
                 totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
               const isAllCompleted = totalCount > 0 && completedCount === totalCount;
               const selectedCount = decomposeCounts[task.id] || 5;
+              const aiPlan = getAiPlan(task, selectedCount);
               const isDecomposing = task.isDecomposing;
+              // 次に取り組むべきサブタスク（最初の未完了）
+              const nextSubtaskId = task.subtasks.find((s) => !s.completed)?.id;
+              const taskError = taskErrors[task.id];
+              const undoState = undoStates[task.id];
 
               return (
                 <div
@@ -282,33 +572,63 @@ export default function Home() {
                 >
                   {/* カードヘッダー */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
-                    <h3 className="text-base font-bold text-slate-100 tracking-wide leading-snug">
-                      {task.title}
-                    </h3>
+                    {editingTask?.id === task.id ? (
+                      <input
+                        type="text"
+                        value={editingTask.title}
+                        onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveTaskEdit();
+                          if (e.key === "Escape") setEditingTask(null);
+                        }}
+                        onBlur={saveTaskEdit}
+                        className="flex-1 bg-[#0d0e14] border border-cyan-400/80 rounded-lg px-2.5 py-1 text-base font-bold text-white focus:outline-none"
+                        autoFocus
+                      />
+                    ) : (
+                      <h3
+                        onClick={() => setEditingTask({ id: task.id, title: task.title })}
+                        className="text-base font-bold text-slate-100 tracking-wide leading-snug cursor-text hover:text-cyan-200 transition-colors"
+                        title="クリックしてタスク名を編集"
+                      >
+                        {task.title}
+                      </h3>
+                    )}
 
                     {/* 分解操作エリア */}
                     <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                      {/* 分解粒度チップ */}
-                      <div className="flex items-center bg-[#0d0e14] p-1 rounded-xl text-xs font-medium border border-slate-800">
-                        {[1, 3, 5, 10].map((num) => (
-                          <button
-                            key={num}
-                            onClick={() => setTaskDecomposeCount(task.id, num)}
-                            className={`px-2.5 py-1 rounded-lg transition-all text-xs font-mono ${
-                              selectedCount === num
-                                ? "bg-cyan-950 text-cyan-300 font-black border border-cyan-400/60 shadow-[0_0_10px_rgba(6,182,212,0.4)] scale-105"
-                                : "text-slate-400 hover:text-slate-200"
-                            }`}
-                          >
-                            {num}
-                          </button>
-                        ))}
-                      </div>
+                      {aiPlan.mode === "regenerate" ? (
+                        /* 再提案時は個数が自動で決まる（未完了のAI提案と同数） */
+                        <div
+                          className="bg-[#0d0e14] px-3 py-1.5 rounded-xl text-xs font-mono text-slate-400 border border-slate-800"
+                          title="未完了のAI提案と同じ個数で作り直すため、タスクの総数は増えません"
+                        >
+                          残り<span className="text-cyan-300 font-black mx-0.5">{aiPlan.count}</span>個
+                        </div>
+                      ) : (
+                        /* 分解粒度チップ */
+                        <div className="flex items-center bg-[#0d0e14] p-1 rounded-xl text-xs font-medium border border-slate-800">
+                          {[1, 3, 5, 10].map((num) => (
+                            <button
+                              key={num}
+                              onClick={() => setTaskDecomposeCount(task.id, num)}
+                              className={`px-2.5 py-1 rounded-lg transition-all text-xs font-mono ${
+                                selectedCount === num
+                                  ? "bg-cyan-950 text-cyan-300 font-black border border-cyan-400/60 shadow-[0_0_10px_rgba(6,182,212,0.4)] scale-105"
+                                  : "text-slate-400 hover:text-slate-200"
+                              }`}
+                            >
+                              {num}
+                            </button>
+                          ))}
+                        </div>
+                      )}
 
                       {/* 高コントラスト AI分解ボタン */}
                       <button
-                        onClick={() => decomposeTask(task.id, task.title)}
+                        onClick={() => decomposeTask(task)}
                         disabled={isDecomposing}
+                        title={AI_MODE_DESCRIPTIONS[aiPlan.mode]}
                         className={`text-xs font-black px-4 py-2 rounded-xl transition-all shadow-md flex items-center gap-1.5 shrink-0 active:scale-95 border ${
                           isDecomposing
                             ? "animate-cyber-shimmer border-cyan-400/50 text-cyan-200 cursor-not-allowed"
@@ -318,11 +638,11 @@ export default function Home() {
                         <span className={`text-cyan-400 text-sm drop-shadow-[0_0_5px_rgba(6,182,212,0.8)] ${isDecomposing ? "animate-spin inline-block" : ""}`}>
                           ⚡
                         </span>
-                        <span className="tracking-wider">{isDecomposing ? "PROCESSING..." : "AI分解"}</span>
+                        <span className="tracking-wider">{isDecomposing ? "PROCESSING..." : AI_MODE_LABELS[aiPlan.mode]}</span>
                       </button>
 
                       <button
-                        onClick={() => deleteTask(task.id)}
+                        onClick={() => deleteTask(task)}
                         className="text-slate-500 hover:text-rose-400 p-1 rounded-lg transition-colors text-xs font-mono"
                         title="タスクを削除"
                       >
@@ -331,8 +651,46 @@ export default function Home() {
                     </div>
                   </div>
 
+                  {/* エラー表示 */}
+                  {taskError && (
+                    <div className="mb-4 flex items-start justify-between gap-2 text-xs text-rose-300 bg-rose-950/30 border border-rose-500/30 rounded-xl px-3 py-2">
+                      <span>{taskError}</span>
+                      <button
+                        onClick={() => setTaskError(task.id, null)}
+                        className="text-rose-400 hover:text-rose-200 shrink-0"
+                        title="閉じる"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+
+                  {/* AI再提案の取り消し */}
+                  {undoState && !isDecomposing && (
+                    <div className="mb-4 flex items-center justify-between gap-2 text-xs text-cyan-200 bg-cyan-950/30 border border-cyan-500/30 rounded-xl px-3 py-2">
+                      <span>
+                        未完了のAI提案 {undoState.removed.length}件 を作り直しました
+                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => undoRegenerate(task.id)}
+                          className="font-bold text-cyan-300 hover:text-cyan-100 underline underline-offset-2"
+                        >
+                          元に戻す
+                        </button>
+                        <button
+                          onClick={() => setUndoState(task.id, null)}
+                          className="text-slate-500 hover:text-slate-300"
+                          title="閉じる"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* サイバー進捗バー */}
-                  {!isDecomposing && totalCount > 0 && (
+                  {totalCount > 0 && (
                     <div className="mb-5 bg-[#0d0e14] p-3 rounded-xl border border-slate-800/80">
                       <div className="flex justify-between items-center text-xs font-mono mb-2">
                         <span className={isAllCompleted ? "text-cyan-300 font-bold" : "text-slate-400"}>
@@ -355,38 +713,26 @@ export default function Home() {
                     </div>
                   )}
 
-                  {/* サブタスク表示エリア */}
-                  {isDecomposing ? (
-                    /* スケルトンUI（生成中骨組みアニメーション） */
-                    <div className="space-y-2 mb-4">
-                      {Array.from({ length: selectedCount }).map((_, idx) => (
-                        <div
-                          key={idx}
-                          className="flex items-center gap-3 p-3 rounded-xl bg-[#0d0e14]/80 border border-cyan-500/20 overflow-hidden relative"
-                        >
-                          {/* ダミーチェックボックス */}
-                          <div className="w-4 h-4 rounded border border-slate-800 bg-[#141721] shrink-0" />
-                          
-                          {/* 光線が流れるスケルトンバー */}
-                          <div className="h-4 bg-[#181b26] rounded-md flex-1 overflow-hidden relative">
-                            <div className="absolute inset-0 animate-cyber-shimmer bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent" />
-                          </div>
-
-                          <span className="text-[10px] font-mono text-cyan-500/40 shrink-0">
-                            ANALYZING_{idx + 1}...
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    /* サブタスク一覧（通常描画） */
-                    <div className="space-y-2 mb-4">
-                      {task.subtasks.map((subtask) => (
+                  {/* サブタスク表示エリア（手動整理した内容は分解中も表示し続ける） */}
+                  <div className="space-y-2 mb-4">
+                      {task.subtasks.map((subtask) => {
+                        const isNext = subtask.id === nextSubtaskId;
+                        const isBreakingDown = breakingDownIds.includes(subtask.id);
+                        const isAi = subtask.source === "ai";
+                        // AI再提案中は、置き換わる予定のAI提案を薄く表示する
+                        const willBeReplaced = isDecomposing && isReplaceableByAi(subtask);
+                        return (
                         <div
                           key={subtask.id}
                           className={`flex items-center justify-between p-3 rounded-xl transition-all duration-200 group border ${
-                            subtask.completed
+                            willBeReplaced ? "opacity-40 " : ""
+                          }${
+                            isBreakingDown
+                              ? "bg-[#0d0e14]/80 border-cyan-500/40 animate-cyber-pulse"
+                              : subtask.completed
                               ? "bg-[#0d0e14]/50 border-transparent"
+                              : isNext
+                              ? "bg-cyan-950/30 hover:bg-cyan-950/50 border-cyan-400/60 shadow-[0_0_12px_rgba(6,182,212,0.25)]"
                               : "bg-[#181b26] hover:bg-[#1e2230] border-slate-800 hover:border-cyan-500/40"
                           }`}
                         >
@@ -422,12 +768,40 @@ export default function Home() {
                                     : "text-slate-200 font-medium whitespace-normal"
                                 }`}
                               >
+                                {isNext && !isBreakingDown && (
+                                  <span className="inline-block mr-2 px-1.5 py-0.5 rounded-md bg-cyan-400 text-black text-[10px] font-black font-mono tracking-wider align-middle">
+                                    NEXT
+                                  </span>
+                                )}
+                                {isAi && (
+                                  <span
+                                    className="inline-block mr-2 px-1 rounded border border-cyan-500/30 text-cyan-500/70 text-[10px] font-mono align-middle"
+                                    title="AIの提案（未完了なら AI再提案 で作り直されます。編集すると自分の手順として残ります）"
+                                  >
+                                    AI
+                                  </span>
+                                )}
                                 {subtask.title}
                               </span>
                             )}
                           </div>
 
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+                          {isBreakingDown ? (
+                            <span className="text-[10px] font-mono text-cyan-400/70 shrink-0 ml-2 animate-pulse">
+                              ANALYZING...
+                            </span>
+                          ) : (
+                          /* スマホではホバーできないため常時表示、PCではホバー時のみ表示 */
+                          <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity ml-2 shrink-0">
+                            {!subtask.completed && editingSubtask?.subtaskId !== subtask.id && (
+                              <button
+                                onClick={() => breakDownSubtask(task, subtask)}
+                                className="text-xs text-cyan-500 hover:text-cyan-300 px-2 py-1"
+                                title="手が止まったら：この手順をAIが10分でできるアクションに細分化します"
+                              >
+                                ⚡
+                              </button>
+                            )}
                             {editingSubtask?.subtaskId === subtask.id ? (
                               <button
                                 onClick={saveSubtaskEdit}
@@ -456,16 +830,38 @@ export default function Home() {
                               ✕
                             </button>
                           </div>
+                          )}
                         </div>
-                      ))}
-                    </div>
-                  )}
+                        );
+                      })}
+
+                      {/* スケルトンUI（AI生成中は既存サブタスクの下に骨組みを表示） */}
+                      {isDecomposing &&
+                        Array.from({ length: aiPlan.count }).map((_, idx) => (
+                          <div
+                            key={`skeleton-${idx}`}
+                            className="flex items-center gap-3 p-3 rounded-xl bg-[#0d0e14]/80 border border-cyan-500/20 overflow-hidden relative"
+                          >
+                            {/* ダミーチェックボックス */}
+                            <div className="w-4 h-4 rounded border border-slate-800 bg-[#141721] shrink-0" />
+
+                            {/* 光線が流れるスケルトンバー */}
+                            <div className="h-4 bg-[#181b26] rounded-md flex-1 overflow-hidden relative">
+                              <div className="absolute inset-0 animate-cyber-shimmer bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent" />
+                            </div>
+
+                            <span className="text-[10px] font-mono text-cyan-500/40 shrink-0">
+                              ANALYZING_{idx + 1}...
+                            </span>
+                          </div>
+                        ))}
+                  </div>
 
                   {/* 手動サブタスク追加フォーム */}
                   <div className="flex gap-2 pt-3 border-t border-slate-800">
                     <input
                       type="text"
-                      placeholder="サブタスクを手動追加..."
+                      placeholder="手順を自分で追加...（詰まったら AI再提案 / ⚡）"
                       value={newSubtaskInputs[task.id] || ""}
                       onChange={(e) =>
                         setNewSubtaskInputs({

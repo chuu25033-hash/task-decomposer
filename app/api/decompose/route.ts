@@ -1,94 +1,185 @@
 import { NextResponse } from "next/server";
+import {
+  API_KEY_HEADER,
+  ERROR_CODES,
+  GEMINI_API_BASE,
+  GEMINI_MODELS,
+  isApiKeyError,
+} from "@/app/lib/gemini";
 
 // Vercel HobbyプランでのAPI最大実行時間を15秒に拡張
 export const maxDuration = 15;
 
 export async function POST(req: Request) {
   try {
-    const { taskTitle, count = 5 } = await req.json();
+    const body = await req.json();
+    const taskTitle: unknown = body.taskTitle;
+    // 生成個数は 1〜10 に制限
+    const count = Math.min(Math.max(Number(body.count) || 5, 1), 10);
+    // 既存のサブタスク（補完モード用）
+    const existingSubtasks: { title: string; completed: boolean }[] = Array.isArray(
+      body.existingSubtasks
+    )
+      ? body.existingSubtasks.filter(
+          (s: unknown): s is { title: string; completed: boolean } =>
+            typeof s === "object" && s !== null && typeof (s as { title?: unknown }).title === "string"
+        )
+      : [];
+    // 細分化したいサブタスク（行き詰まったステップ）
+    const focusSubtask: string | undefined =
+      typeof body.focusSubtask === "string" && body.focusSubtask.trim()
+        ? body.focusSubtask
+        : undefined;
 
-    if (!taskTitle) {
+    if (typeof taskTitle !== "string" || !taskTitle.trim()) {
       return NextResponse.json(
         { error: "taskTitle is required" },
         { status: 400 }
       );
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    // ユーザー自身が登録した APIキーを使う（サーバー側では保存しない）
+    const apiKey = req.headers.get(API_KEY_HEADER)?.trim();
 
     if (!apiKey) {
-      console.error("❌ GEMINI_API_KEY が Vercel 環境変数に設定されていません");
       return NextResponse.json(
-        { error: "GEMINI_API_KEY is not configured" },
-        { status: 500 }
+        { error: "Gemini APIキーが登録されていません", code: ERROR_CODES.API_KEY_REQUIRED },
+        { status: 401 }
       );
     }
 
-    const prompt = `タスク:「${taskTitle}」
-上記を即時着手できる超具体的な最小アクションに正確に【${count}個】分解し、以下のJSON形式のみで出力してください。
+    // 各アクションに共通する条件
+    const rules = `条件:
+- 各アクションは「今すぐ10分以内で終わる」大きさにする
+- 動詞で終わる具体的な行動にする（例:「〇〇を開いて△△を3行書き出す」）
+- 考えるだけ・曖昧な表現（「検討する」「頑張る」など）は避ける
+- 実行する順番に並べる`;
 
+    const existingList = existingSubtasks
+      .map((s) => `- ${s.completed ? "[完了] " : ""}${s.title}`)
+      .join("\n");
+
+    let instruction: string;
+    if (focusSubtask) {
+      // 行き詰まった1ステップを細分化
+      instruction = `最終目標:「${taskTitle}」
+この目標に向けた手順のうち「${focusSubtask}」で手が止まっています。
+この手順を、すぐ着手できるアクションに正確に【${count}個】分解してください。`;
+    } else if (existingList) {
+      // 今の進み具合（完了済み＋ユーザー自身の手順）を踏まえて、次に取り組む手順を提案する
+      // 個数が少なくても1つあたりを大きくしないよう、「目標までの全部」ではなく「次の N 個」を求める
+      instruction = `最終目標:「${taskTitle}」
+現在の状況は以下の通りです。[完了] は実行済み、それ以外はユーザー自身が決めた予定の手順です。
+${existingList}
+
+実行済みの作業の続きから、次に取り組むべきアクションを、ユーザーの予定の手順と重複しないように正確に【${count}個】提案してください。
+目標達成まで${count}個で収まらない場合も、1つのアクションを大きくせず、先に取り組むべきものから順に提案してください。`;
+    } else {
+      instruction = `タスク:「${taskTitle}」
+上記を即時着手できる超具体的な最小アクションに正確に【${count}個】分解してください。`;
+    }
+
+    const prompt = `${instruction}
+
+${rules}
+
+以下のJSON形式のみで出力してください。
 {"subtasks":["アクション1","アクション2"]}`;
 
-    const maxRetries = 2;
+    // モデルごとのタイムアウト（合計が maxDuration = 15 秒に収まるように設定）
+    const timeoutsMs = [6000, 7000];
     let lastErrorText = "";
+    let lastStatus = 0;
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    for (const [index, model] of GEMINI_MODELS.entries()) {
+      const timeoutMs = timeoutsMs[index];
+      // タイムアウト監視用の AbortController
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
       try {
-        // タイムアウト監視用の AbortController (13秒でタイムアウト設定)
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 13000);
-
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [{ text: prompt }],
-                },
-              ],
-              generationConfig: {
-                responseMimeType: "application/json",
-                temperature: 0,
+        const response = await fetch(`${GEMINI_API_BASE}/models/${model}:generateContent`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // URL に含めるとログに残りやすいため、キーはヘッダーで渡す
+            "x-goog-api-key": apiKey,
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [{ text: prompt }],
               },
-            }),
-            signal: controller.signal,
-          }
-        );
-
-        clearTimeout(timeoutId);
+            ],
+            generationConfig: {
+              responseMimeType: "application/json",
+              // 出力形式をスキーマで固定し、JSON の崩れを防ぐ
+              responseSchema: {
+                type: "OBJECT",
+                properties: {
+                  subtasks: { type: "ARRAY", items: { type: "STRING" } },
+                },
+                required: ["subtasks"],
+              },
+              // 思考を最小限にして応答を速くする
+              // （Gemini 3 系は temperature を下げると出力がループしやすいため既定値のままにする）
+              thinkingConfig: { thinkingLevel: "low" },
+            },
+          }),
+          signal: controller.signal,
+        });
 
         if (response.ok) {
           const data = await response.json();
           const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          const parsedData = rawText ? JSON.parse(rawText) : null;
+          const subtasks: string[] = Array.isArray(parsedData?.subtasks)
+            ? parsedData.subtasks.filter((s: unknown) => typeof s === "string" && s.trim())
+            : [];
 
-          if (rawText) {
-            const parsedData = JSON.parse(rawText);
-            return NextResponse.json({ subtasks: parsedData.subtasks || [] });
+          if (subtasks.length > 0) {
+            return NextResponse.json({ subtasks });
           }
+          console.warn(`⚠️ ${model}: 空の応答が返されました。次のモデルを試します`);
+          continue;
         }
 
         lastErrorText = await response.text();
-        console.warn(`⚠️ Attempt ${attempt} failed (${response.status}). Retrying...`);
+        lastStatus = response.status;
 
-        if (response.status === 429 && attempt < maxRetries) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+        // APIキーが無効な場合はリトライしても無駄なので即座に返す
+        if (isApiKeyError(response.status, lastErrorText)) {
+          console.warn(`⚠️ APIキーが無効です (${response.status})`);
+          return NextResponse.json(
+            { error: "Gemini APIキーが無効です", code: ERROR_CODES.INVALID_API_KEY },
+            { status: 401 }
+          );
         }
+
+        // 503（高負荷）・429（上限）などはモデルごとに状況が異なるため、次のモデルを試す
+        console.warn(`⚠️ ${model} failed (${response.status}). 次のモデルを試します`);
       } catch (err: unknown) {
         const errorName = err instanceof Error ? err.name : "";
         if (errorName === "AbortError") {
-          console.warn(`⚠️ Fetch attempt ${attempt} timed out after 13s`);
+          console.warn(`⚠️ ${model} timed out after ${timeoutMs / 1000}s`);
         } else {
-          console.warn(`⚠️ Fetch attempt ${attempt} failed:`, err);
+          console.warn(`⚠️ ${model} failed:`, err);
         }
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
 
     console.error("❌ Gemini API request failed:", lastErrorText);
+
+    // ユーザーごとの無料枠の上限に達した場合
+    if (lastStatus === 429) {
+      return NextResponse.json(
+        { error: "Gemini API rate limit.", code: ERROR_CODES.RATE_LIMITED },
+        { status: 429 }
+      );
+    }
+
     return NextResponse.json(
       { error: "Gemini API timeout or rate limit." },
       { status: 504 }
