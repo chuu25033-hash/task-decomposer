@@ -578,19 +578,19 @@ export default function Home() {
 
       {/* ヘッダーエリア（スッキリ化版） */}
       <header className="bg-[#141721]/80 backdrop-blur-2xl border-b border-cyan-500/20 sticky top-0 z-20 shadow-xl shadow-black/50">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-cyan-950 border border-cyan-400/60 flex items-center justify-center text-cyan-300 font-black text-lg shadow-[0_0_15px_rgba(6,182,212,0.4)]">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-cyan-950 border border-cyan-400/60 flex items-center justify-center text-cyan-300 font-black text-base sm:text-lg shadow-[0_0_15px_rgba(6,182,212,0.4)] shrink-0">
               T
             </div>
-            <div>
-              <h1 className="text-xl font-black tracking-wider bg-gradient-to-r from-cyan-300 via-sky-200 to-cyan-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(6,182,212,0.3)]">
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-xl font-black tracking-wide sm:tracking-wider truncate bg-gradient-to-r from-cyan-300 via-sky-200 to-cyan-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(6,182,212,0.3)]">
                 TaskDecomposer
               </h1>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* 使い方 */}
           <button
             onClick={() => setIsHelpOpen(true)}
@@ -605,7 +605,7 @@ export default function Home() {
           {isLoaded && (
             <button
               onClick={() => openKeyModal()}
-              className={`flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl border transition-all active:scale-95 ${
+              className={`h-8 flex items-center gap-1.5 sm:gap-2 text-xs font-bold px-2.5 sm:px-3 rounded-xl border whitespace-nowrap transition-all active:scale-95 ${
                 apiKey
                   ? "border-slate-700 text-slate-300 hover:border-cyan-500/60 hover:text-cyan-200"
                   : "border-rose-500/50 text-rose-300 hover:bg-rose-950/40"
@@ -617,7 +617,14 @@ export default function Home() {
                   apiKey ? "bg-cyan-400 shadow-[0_0_6px_rgba(6,182,212,0.9)]" : "bg-rose-400 animate-pulse"
                 }`}
               />
-              {apiKey ? "APIキー登録済み" : "APIキー未登録"}
+              {/* スマホでは登録済みのとき短く表示（状態は点の色でも分かる）。未登録は気づけるよう省略しない */}
+              {apiKey ? (
+                <>
+                  APIキー<span className="hidden sm:inline">登録済み</span>
+                </>
+              ) : (
+                "APIキー未登録"
+              )}
             </button>
           )}
           </div>
