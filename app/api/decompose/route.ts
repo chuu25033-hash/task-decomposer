@@ -3,6 +3,7 @@ import {
   API_KEY_HEADER,
   ERROR_CODES,
   GEMINI_API_BASE,
+  GEMINI_BLOCK_REASONS,
   GEMINI_MODELS,
   isApiKeyError,
 } from "@/app/lib/gemini";
@@ -10,6 +11,18 @@ import { MAX_TITLE_LENGTH } from "@/app/types/task";
 
 // AI に渡す既存サブタスクの最大件数
 const MAX_EXISTING_SUBTASKS = 50;
+
+// 倫理に反するタスクの拒否（判定は AI に任せ、理由に応じてエラーコードを返す）
+const refusalResponse = (reason: "unethical" | "self_harm") =>
+  reason === "self_harm"
+    ? NextResponse.json(
+        { error: "Task refused (self harm)", code: ERROR_CODES.TASK_REFUSED_SELF_HARM },
+        { status: 422 }
+      )
+    : NextResponse.json(
+        { error: "Task refused (unethical)", code: ERROR_CODES.TASK_REFUSED },
+        { status: 422 }
+      );
 
 // Vercel HobbyプランでのAPI最大実行時間を15秒に拡張
 export const maxDuration = 15;
@@ -106,12 +119,27 @@ ${existingList}
 上記を即時着手できる超具体的な最小アクションに正確に【${count}個】分解してください。${rejectedNote}`;
     }
 
+    // 倫理チェック（タスク名だけでなく、細分化対象や既存の手順も含めて判断させる）
+    // 正当なタスクまで断らないよう、言葉ではなく「目的」で判断させ、明らかな場合に限って拒否する
+    // （軽量モデルは「ピッキング」「ハッキング」などの単語だけで拒否しがちなため、例を具体的に示す）
+    const safetyRules = `安全性の判断（refusal の決め方）:
+- 基本は "none"。危険そうな単語が含まれるかではなく、タスクの「目的」で判断する
+- "unethical" にするのは、目的そのものが他者や社会を害することだと明らかな場合だけ
+  （例:「隣の家の鍵をこじ開けて入る」「元恋人の居場所を突き止める」「他人のSNSに不正ログインする」「人を脅す文面を作る」）
+- 防犯・セキュリティ対策・学習・研究・報道・創作・仕事・害虫駆除などの目的が書かれている、または普通に考えられる場合は "none"
+  （例:「防犯のためにピッキングの手口を調べる」「自宅サーバーの脆弱性を診断する」「推理小説のトリックを考える」）
+- 自傷・自殺そのものが目的の場合だけ "self_harm"
+- "none" 以外のときは subtasks を空配列にする
+- "none" で分解するときは、手口の実行方法ではなく、正当な目的を達成するための行動（公的機関の情報を読む・対策を実施する等）にする`;
+
     const prompt = `${instruction}
 
 ${rules}
 
+${safetyRules}
+
 以下のJSON形式のみで出力してください。
-{"subtasks":["アクション1","アクション2"]}`;
+{"refusal":"none","subtasks":["アクション1","アクション2"]}`;
 
     // モデルごとのタイムアウト（合計が maxDuration = 15 秒に収まるように設定）
     const timeoutsMs = [6000, 7000];
@@ -144,9 +172,11 @@ ${rules}
               responseSchema: {
                 type: "OBJECT",
                 properties: {
+                  refusal: { type: "STRING", enum: ["none", "unethical", "self_harm"] },
                   subtasks: { type: "ARRAY", items: { type: "STRING" } },
                 },
-                required: ["subtasks"],
+                required: ["refusal", "subtasks"],
+                propertyOrdering: ["refusal", "subtasks"],
               },
               // 思考を最小限にして応答を速くする
               // （Gemini 3 系は temperature を下げると出力がループしやすいため既定値のままにする）
@@ -158,8 +188,19 @@ ${rules}
 
         if (response.ok) {
           const data = await response.json();
+          // Gemini の安全フィルタでブロックされた場合は、別モデルでも結果は同じなので即座に拒否する
+          const blockReason = data.promptFeedback?.blockReason ?? data.candidates?.[0]?.finishReason;
+          if (GEMINI_BLOCK_REASONS.includes(blockReason)) {
+            console.warn(`⚠️ ${model}: 安全フィルタでブロックされました (${blockReason})`);
+            return refusalResponse("unethical");
+          }
+
           const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
           const parsedData = rawText ? JSON.parse(rawText) : null;
+          if (parsedData?.refusal === "unethical" || parsedData?.refusal === "self_harm") {
+            console.warn(`⚠️ ${model}: タスクの分解を拒否しました (${parsedData.refusal})`);
+            return refusalResponse(parsedData.refusal);
+          }
           const subtasks: string[] = Array.isArray(parsedData?.subtasks)
             ? parsedData.subtasks.filter((s: unknown) => typeof s === "string" && s.trim())
             : [];

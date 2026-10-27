@@ -18,7 +18,15 @@ export const ERROR_CODES = {
   API_KEY_REQUIRED: "API_KEY_REQUIRED",
   INVALID_API_KEY: "INVALID_API_KEY",
   RATE_LIMITED: "RATE_LIMITED",
+  // 倫理に反するタスク（他者や社会への加害・犯罪など）のため分解を拒否
+  TASK_REFUSED: "TASK_REFUSED",
+  // 自傷・自殺に関わるタスク（拒否したうえで相談窓口を案内する）
+  TASK_REFUSED_SELF_HARM: "TASK_REFUSED_SELF_HARM",
 } as const;
+
+// Gemini 自体の安全フィルタでブロックされたときの理由（いずれも拒否として扱う）
+// "OTHER" は安全性以外の理由でも返るため含めない
+export const GEMINI_BLOCK_REASONS = ["SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"];
 
 // Gemini のレスポンスが APIキー起因のエラーかどうか
 export const isApiKeyError = (status: number, bodyText: string) =>

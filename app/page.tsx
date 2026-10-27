@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import ApiKeyModal from "@/app/components/ApiKeyModal";
+import HelpModal from "@/app/components/HelpModal";
+import { CheckIcon, EditIcon, TrashIcon } from "@/app/components/icons";
 import { clearApiKey, loadApiKey, type StoredApiKey } from "@/app/lib/apiKeyStorage";
 import { API_KEY_HEADER, ERROR_CODES } from "@/app/lib/gemini";
 import { isReplaceableByAi, MAX_TITLE_LENGTH, type Subtask, type Task } from "@/app/types/task";
@@ -38,6 +40,8 @@ const AI_MODE_DESCRIPTIONS: Record<AiMode, string> = {
 const TASKS_KEY = "task_decomposer_tasks";
 // タスクの並び順の形式（旧バージョンの古い順データを一度だけ新しい順に揃えるための目印）
 const TASK_ORDER_KEY = "task_decomposer_task_order";
+// 「採用」のヒントを閉じたかどうか（一度閉じたら二度と出さない）
+const ADOPT_TIP_KEY = "task_decomposer_adopt_tip_dismissed";
 
 // 「とりあえずこれだけやる」集中タイマーの長さ（AIが提案する1アクションの目安と合わせる）
 const FOCUS_MINUTES = 10;
@@ -89,6 +93,9 @@ export default function Home() {
   // すべて完了して折りたたまれたタスクのうち、開いているもの
   const [expandedTaskIds, setExpandedTaskIds] = useState<string[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  // 復元前にヒントが一瞬出ないよう、初期値は「閉じた」扱いにする
+  const [isAdoptTipDismissed, setIsAdoptTipDismissed] = useState(true);
 
   // 初回レンダリング時に LocalStorage から復元
   useEffect(() => {
@@ -116,6 +123,7 @@ export default function Home() {
     localStorage.setItem(TASK_ORDER_KEY, "newest-first");
     // 期限切れのキーは loadApiKey が null を返す
     setApiKey(loadApiKey());
+    setIsAdoptTipDismissed(localStorage.getItem(ADOPT_TIP_KEY) === "1");
     setIsLoaded(true);
   }, []);
 
@@ -221,6 +229,8 @@ export default function Home() {
 
   // AI提案の「採用」を切り替える（採用したものは AI再提案 で作り直さない）
   const toggleKeepSubtask = (taskId: string, subtaskId: string) => {
+    // 一度でも採用を使えば操作は分かっているので、ヒントは出さない
+    dismissAdoptTip();
     setTasks((prev) =>
       prev.map((task) =>
         task.id === taskId
@@ -339,6 +349,13 @@ export default function Home() {
     setKeyModalReason(null);
   }, []);
 
+  const closeHelp = useCallback(() => setIsHelpOpen(false), []);
+
+  const dismissAdoptTip = () => {
+    setIsAdoptTipDismissed(true);
+    localStorage.setItem(ADOPT_TIP_KEY, "1");
+  };
+
   const removeApiKey = () => {
     clearApiKey();
     setApiKey(null);
@@ -358,6 +375,17 @@ export default function Home() {
     }
     if (code === ERROR_CODES.RATE_LIMITED) {
       setTaskError(taskId, "Gemini の無料枠の利用上限に達しました。しばらく待ってから再試行してください。");
+      return;
+    }
+    if (code === ERROR_CODES.TASK_REFUSED) {
+      setTaskError(taskId, "このタスクは、他者や社会に害を与えるおそれがあるため分解できません。");
+      return;
+    }
+    if (code === ERROR_CODES.TASK_REFUSED_SELF_HARM) {
+      setTaskError(
+        taskId,
+        "このタスクは分解できません。つらい気持ちを抱えているなら、ひとりで抱え込まずに相談してください。よりそいホットライン 0120-279-338（24時間・無料）"
+      );
       return;
     }
     setTaskError(taskId, fallbackMessage);
@@ -550,7 +578,7 @@ export default function Home() {
 
       {/* ヘッダーエリア（スッキリ化版） */}
       <header className="bg-[#141721]/80 backdrop-blur-2xl border-b border-cyan-500/20 sticky top-0 z-20 shadow-xl shadow-black/50">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-cyan-950 border border-cyan-400/60 flex items-center justify-center text-cyan-300 font-black text-lg shadow-[0_0_15px_rgba(6,182,212,0.4)]">
               T
@@ -561,6 +589,17 @@ export default function Home() {
               </h1>
             </div>
           </div>
+
+          <div className="flex items-center gap-2">
+          {/* 使い方 */}
+          <button
+            onClick={() => setIsHelpOpen(true)}
+            className="w-8 h-8 rounded-xl border border-slate-700 text-slate-300 hover:border-cyan-500/60 hover:text-cyan-200 text-sm font-black transition-all active:scale-95"
+            title="使い方"
+            aria-label="使い方"
+          >
+            ?
+          </button>
 
           {/* APIキー登録状態 */}
           {isLoaded && (
@@ -581,8 +620,11 @@ export default function Home() {
               {apiKey ? "APIキー登録済み" : "APIキー未登録"}
             </button>
           )}
+          </div>
         </div>
       </header>
+
+      {isHelpOpen && <HelpModal onClose={closeHelp} />}
 
       {isKeyModalOpen && (
         <ApiKeyModal
@@ -598,9 +640,9 @@ export default function Home() {
       )}
 
       {/* メインコンテンツ */}
-      <main className="max-w-2xl mx-auto px-4 sm:px-6 py-12">
+      <main className="max-w-2xl mx-auto px-3 sm:px-6 py-8 sm:py-12">
         {/* キャッチコピー */}
-        <div className="text-center mb-10">
+        <div className="text-center mb-6 sm:mb-10">
           <h2 className="text-2xl sm:text-4xl font-black text-slate-100 tracking-tight mb-3">
             思考の摩擦を、<span className="bg-gradient-to-r from-cyan-400 via-sky-300 to-cyan-200 bg-clip-text text-transparent drop-shadow-[0_0_12px_rgba(6,182,212,0.4)]">ゼロ</span>にする。
           </h2>
@@ -662,6 +704,12 @@ export default function Home() {
             </div>
           ) : (
             tasks.map((task) => {
+              // 「採用」のヒントは、未採用のAI提案がある最初のカードにだけ出す
+              const showAdoptTip =
+                !isAdoptTipDismissed &&
+                !task.isDecomposing &&
+                task.id ===
+                  tasks.find((t) => t.subtasks.some((s) => isReplaceableByAi(s)))?.id;
               const completedCount = task.subtasks.filter((s) => s.completed).length;
               const totalCount = task.subtasks.length;
               const progressPercent =
@@ -681,7 +729,7 @@ export default function Home() {
               return (
                 <div
                   key={task.id}
-                  className={`bg-[#141721] rounded-2xl p-6 shadow-xl border border-slate-800/80 transition-all ${
+                  className={`bg-[#141721] rounded-2xl p-4 sm:p-6 shadow-xl border border-slate-800/80 transition-all ${
                     isDecomposing
                       ? "animate-cyber-scan animate-cyber-pulse border-cyan-500/60 shadow-[0_0_20px_rgba(6,182,212,0.4)]"
                       : task.id === recentlyAddedId
@@ -763,10 +811,11 @@ export default function Home() {
 
                       <button
                         onClick={() => deleteTask(task)}
-                        className="text-slate-500 hover:text-rose-400 p-1 rounded-lg transition-colors text-xs font-mono"
+                        className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg transition-colors"
                         title="タスクを削除"
+                        aria-label="タスクを削除"
                       >
-                        DEL
+                        <TrashIcon className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
@@ -848,6 +897,28 @@ export default function Home() {
                   {!isCollapsed && (
                   <>
 
+                  {/* 初回だけの操作ヒント（AIバッジがボタンだと気づきにくいため） */}
+                  {showAdoptTip && (
+                    <div className="mb-3 flex items-start justify-between gap-2 text-xs text-amber-100 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2">
+                      <span className="leading-relaxed">
+                        💡 気に入った提案は <b className="text-amber-300">AI</b> をタップして <b className="text-amber-300">📌採用</b>。AI再提案で作り直しても残ります。
+                        <button
+                          onClick={() => setIsHelpOpen(true)}
+                          className="ml-1 font-bold text-cyan-300 hover:text-cyan-100 underline underline-offset-2"
+                        >
+                          使い方
+                        </button>
+                      </span>
+                      <button
+                        onClick={dismissAdoptTip}
+                        className="text-amber-300/70 hover:text-amber-100 shrink-0"
+                        title="閉じる"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+
                   {/* サブタスク表示エリア（手動整理した内容は分解中も表示し続ける） */}
                   <div className="space-y-2 mb-4">
                       {task.subtasks.map((subtask, index) => {
@@ -865,7 +936,8 @@ export default function Home() {
                         return (
                         <div
                           key={subtask.id}
-                          className={`flex items-center justify-between p-3 rounded-xl transition-all duration-200 group border ${
+                          /* スマホでは本文を横幅いっぱいに使い、操作ボタンは下の段に回す */
+                          className={`flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 rounded-xl transition-all duration-200 group border ${
                             willBeReplaced ? "opacity-40 " : ""
                           }${
                             isBreakingDown
@@ -877,13 +949,13 @@ export default function Home() {
                               : "bg-[#181b26] hover:bg-[#1e2230] border-slate-800 hover:border-cyan-500/40"
                           }`}
                         >
-                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 flex-1 min-w-0">
                             {/* チェックボックス */}
                             <input
                               type="checkbox"
                               checked={subtask.completed}
                               onChange={() => toggleSubtask(task.id, subtask.id)}
-                              className={`w-4 h-4 rounded border-slate-700 bg-[#0d0e14] text-cyan-400 focus:ring-cyan-400 cursor-pointer shrink-0 transition-all accent-cyan-400 ${
+                              className={`w-4 h-4 mt-0.5 sm:mt-0 rounded border-slate-700 bg-[#0d0e14] text-cyan-400 focus:ring-cyan-400 cursor-pointer shrink-0 transition-all accent-cyan-400 ${
                                 lastCheckedId === subtask.id ? "animate-pop" : ""
                               }`}
                             />
@@ -993,12 +1065,12 @@ export default function Home() {
                           </div>
 
                           {isBreakingDown ? (
-                            <span className="text-[10px] font-mono text-cyan-400/70 shrink-0 ml-2 animate-pulse">
+                            <span className="text-[10px] font-mono text-cyan-400/70 shrink-0 self-end sm:self-auto mt-1 sm:mt-0 sm:ml-2 animate-pulse">
                               ANALYZING...
                             </span>
                           ) : (
                           /* スマホではホバーできないため常時表示、PCではホバー時のみ表示 */
-                          <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity ml-2 shrink-0">
+                          <div className="flex items-center justify-end gap-1 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity mt-1 -mb-1 sm:my-0 sm:ml-2 shrink-0">
                             {!subtask.completed && editingSubtask?.subtaskId !== subtask.id && (
                               <button
                                 onClick={() => breakDownSubtask(task, subtask)}
@@ -1032,9 +1104,11 @@ export default function Home() {
                             {isEditing ? (
                               <button
                                 onClick={saveSubtaskEdit}
-                                className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 px-2 py-1"
+                                className="text-cyan-400 hover:text-cyan-300 px-2 py-1"
+                                title="保存"
+                                aria-label="保存"
                               >
-                                保存
+                                <CheckIcon />
                               </button>
                             ) : (
                               <button
@@ -1045,16 +1119,20 @@ export default function Home() {
                                     title: subtask.title,
                                   })
                                 }
-                                className="text-xs font-mono text-slate-500 hover:text-slate-300 px-2 py-1"
+                                className="text-slate-500 hover:text-slate-300 px-2 py-1"
+                                title="手順を編集"
+                                aria-label="手順を編集"
                               >
-                                EDIT
+                                <EditIcon />
                               </button>
                             )}
                             <button
                               onClick={() => deleteSubtask(task.id, subtask.id)}
-                              className="text-xs font-mono text-slate-600 hover:text-cyan-400 px-2 py-1"
+                              className="text-slate-600 hover:text-rose-400 px-2 py-1"
+                              title="手順を削除"
+                              aria-label="手順を削除"
                             >
-                              ✕
+                              <TrashIcon />
                             </button>
                           </div>
                           )}
@@ -1102,9 +1180,9 @@ export default function Home() {
                     />
                     <button
                       onClick={() => addSubtask(task.id)}
-                      className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono px-4 py-2 rounded-xl transition-all shrink-0 active:scale-95"
+                      className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-2 rounded-xl transition-all shrink-0 active:scale-95"
                     >
-                      + ADD
+                      追加
                     </button>
                   </div>
                   </>

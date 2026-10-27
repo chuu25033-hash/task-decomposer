@@ -41,6 +41,8 @@ app/
   api/decompose/route.ts  # POST /api/decompose — Gemini でタスク分解
   api/verify-key/route.ts # POST /api/verify-key — 登録前に APIキーの有効性を確認
   components/ApiKeyModal.tsx # APIキー登録モーダル（3ステップの手順案内）
+  components/HelpModal.tsx   # 使い方モーダル（基本の流れ3ステップ＋ボタンの意味）
+  components/icons.tsx       # 操作ボタン用 SVG アイコン（編集・削除・保存）。✕ は「閉じる」専用、削除はゴミ箱
   lib/gemini.ts           # モデル名・ヘッダー名・エラーコード等の共通定数
   lib/apiKeyStorage.ts    # APIキーの LocalStorage 保存（有効期限 90 日）
 ```
@@ -71,6 +73,7 @@ app/
 - 集中タイマー: NEXT に「▶ 10分だけやる」（`FOCUS_MINUTES`）。`focusTimer`（同時に1つ・非永続）で管理し、残り時間はタブのタイトルにも表示。時間切れで「完了にする / +5分 / 終了」。対象サブタスクの完了・削除・AIによる置き換えで自動停止
 - サブタスクは ↑↓ ボタンで並べ替え（スマホでも操作しやすいようドラッグは使わない）
 - すべて完了したタスクは自動で折りたたむ（`expandedTaskIds` で開閉、非永続）
+- 使い方: ヘッダーの「?」で `HelpModal` を開く。加えて「採用」は気づきにくいため、未採用のAI提案がある最初のカードに一度だけヒントを出す（✕ か採用操作で `task_decomposer_adopt_tip_dismissed` に記録し、以後出さない）
 - タスク名・サブタスク名は `MAX_TITLE_LENGTH`（200文字）まで。API 側でも切り詰め、既存サブタスクは最大 50 件まで送る
 
 ### APIキー（ユーザー持ち込み方式）
@@ -83,8 +86,11 @@ app/
 - リクエスト: `{ taskTitle: string, count?: number, existingSubtasks?: { title, completed }[], rejectedSubtasks?: string[], focusSubtask?: string }`（count 既定値 5、1〜10 に制限）
   - `focusSubtask` あり → その手順を細分化 / `existingSubtasks` あり → 完了済みの続きから、ユーザーの手順と重複しない「次に取り組む N 個」を提案（個数が少なくても1つを大きくしない） / どちらも無し → 一から分解
   - いずれも「10分以内で終わる・動詞で終わる具体的な行動」を条件としてプロンプトに含める
+- 倫理に反するタスクは拒否する: `responseSchema` の `refusal`（`none` / `unethical` / `self_harm`）を AI に判定させ、拒否なら 422 + `TASK_REFUSED` / `TASK_REFUSED_SELF_HARM` を返す。Gemini の安全フィルタ（`GEMINI_BLOCK_REASONS`）でブロックされた場合も、次のモデルを試さず `TASK_REFUSED`
+  - 正当な目的が考えられるもの（防犯・学習・創作など）まで断らないよう、プロンプトでは「明らかな場合のみ」拒否させている
+  - 自傷・自殺に関わる場合は、カード内のエラーで相談窓口（よりそいホットライン）を案内する
 - ヘッダー: `x-gemini-api-key`（必須）
-- レスポンス: `{ subtasks: string[] }`、エラー時は `{ error, code? }`（400 / 401 / 429 / 500 / 504。`code` は `lib/gemini.ts` の `ERROR_CODES`）
+- レスポンス: `{ subtasks: string[] }`、エラー時は `{ error, code? }`（400 / 401 / 422 / 429 / 500 / 504。`code` は `lib/gemini.ts` の `ERROR_CODES`）
 - Gemini に `responseMimeType: "application/json"` + `responseSchema` で JSON 出力を強制。`thinkingConfig: { thinkingLevel: "low" }` で思考を抑えて高速化
   - `temperature` は指定しない（Gemini 3 系は低温度だと出力がループしやすい）
 - Vercel Hobby の制限に合わせて `export const maxDuration = 15`。`GEMINI_MODELS` を順に試し、各モデルは `AbortController` で 6 秒 / 7 秒でタイムアウト。503・429・タイムアウト・空応答なら次のモデルへフォールバック（APIキー無効時は即 401）
