@@ -139,7 +139,7 @@ export default function ApiKeyModal({ current, reason, onSaved, onClear, onClose
                   autoComplete="off"
                   spellCheck={false}
                   autoFocus
-                  className="flex-1 min-w-0 bg-[#0d0e14] border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-400 font-mono focus:outline-none focus:border-cyan-400/80"
+                  className="flex-1 min-w-0 bg-[#0d0e14] border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 placeholder-slate-400 font-mono focus:outline-none focus:border-cyan-400/80"
                 />
                 <button
                   onClick={register}

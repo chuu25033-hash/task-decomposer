@@ -529,7 +529,7 @@ export default function Home() {
             placeholder="大きなタスクを入力... (例: レポートを提出する)"
             aria-label="新しいタスク"
             maxLength={MAX_TITLE_LENGTH}
-            className="flex-1 min-w-0 px-4 py-3 text-slate-100 placeholder-slate-400 bg-transparent focus:outline-none text-sm font-medium tracking-wide"
+            className="flex-1 min-w-0 px-4 py-3 text-slate-100 placeholder-slate-400 bg-transparent focus:outline-none text-base sm:text-sm font-medium tracking-wide"
           />
           <button
             onClick={submitTask}

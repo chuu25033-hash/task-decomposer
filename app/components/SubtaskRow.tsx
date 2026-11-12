@@ -87,7 +87,7 @@ export default function SubtaskRow({
             {...edit.inputProps}
             maxLength={MAX_TITLE_LENGTH}
             aria-label="手順の名前"
-            className="bg-[#0d0e14] border border-cyan-400/80 rounded-lg px-2.5 py-1 text-sm flex-1 min-w-0 text-white focus:outline-none"
+            className="bg-[#0d0e14] border border-cyan-400/80 rounded-lg px-2.5 py-1 text-base sm:text-sm flex-1 min-w-0 text-white focus:outline-none"
             autoFocus
           />
         ) : (
