@@ -92,3 +92,11 @@
     slide-in 0.35s cubic-bezier(0.16, 1, 0.3, 1),
     cyber-pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1);
 }
+
+/* 上下に引っ張りすぎたときに白い背景が見えないよう、ページ全体を画面と同じ色にし、跳ね返りも止める */
+html,
+body {
+  background-color: #0f1117;
+  color-scheme: dark;
+  overscroll-behavior-y: none;
+}

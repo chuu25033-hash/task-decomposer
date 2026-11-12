@@ -1,10 +1,15 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { connection } from "next/server";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "TaskDecomposer",
   description: "大きなタスクを、AIが今すぐ10分でできるアクションに分解するタスク管理アプリ",
+};
+
+// スマホのブラウザのアドレスバー周りも背景と同じ色にする
+export const viewport: Viewport = {
+  themeColor: "#0f1117",
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
