@@ -26,51 +26,72 @@ npm run dev       # 開発サーバー起動 (http://localhost:3000)
 npm run build     # 本番ビルド
 npm run start     # ビルド成果物を起動
 npm run lint      # ESLint 実行
+npm test          # Vitest（app/**/*.test.{ts,tsx}）を1回実行
+npm run test:watch # Vitest をウォッチモードで実行
 ```
 
-テストフレームワークは未導入。変更後は `npm run lint` と `npm run build` で型・ビルドエラーを確認する。
+変更後は `npm test`・`npm run lint`・`npm run build` で確認する。テストは純粋なロジック（`app/lib/*.test.ts`、node 環境）と、コンポーネント（`app/components/*.test.tsx`、先頭の `// @vitest-environment jsdom` で jsdom・React Testing Library）が対象（設定は `vitest.config.mts`、`@/*` エイリアスあり）。
 
 ## ディレクトリ構成
 
 ```
 app/
   layout.tsx              # ルートレイアウト（metadata, lang="ja"）
-  page.tsx                # メイン画面（"use client"。UI・状態管理をすべてこの1ファイルに集約）
+  page.tsx                # メイン画面（"use client"。状態管理と AI 呼び出し。カードの表示は TaskCard に分割）
   globals.css             # Tailwind 読み込み + カスタムアニメーション（pop, cyber-shimmer, cyber-glow 等）
   types/task.ts           # Task / Subtask 型定義
   api/decompose/route.ts  # POST /api/decompose — Gemini でタスク分解
   api/verify-key/route.ts # POST /api/verify-key — 登録前に APIキーの有効性を確認
+  components/TaskCard.tsx    # タスク1件のカード（AIボタン・進捗・取り消し・ヒント・手順の追加。タスク名の編集状態はカード内に持つ）
+  components/SubtaskRow.tsx  # サブタスク1行（完了・採用・⚡・並べ替え・編集・削除。編集状態は行の中に持つ）
   components/ApiKeyModal.tsx # APIキー登録モーダル（3ステップの手順案内）
   components/HelpModal.tsx   # 使い方モーダル（基本の流れ3ステップ＋ボタンの意味）
+  components/BackupModal.tsx # バックアップ（JSON ファイルへの書き出し・読み込み）
   components/icons.tsx       # 操作ボタン用 SVG アイコン（編集・削除・保存）。✕ は「閉じる」専用、削除はゴミ箱
+  hooks/useStoredTasks.ts # タスクの LocalStorage 保存・復元・他タブとの同期（storage イベント）・保存失敗の検知
+  hooks/useInlineEdit.ts  # その場編集（Enter/フォーカス外れで保存・Esc で取り消し・IME 変換中の Enter は無視）
+  hooks/useModalFocus.ts  # モーダルのフォーカス移動・閉じ込め・Esc・閉じたら元の要素に戻す
   lib/gemini.ts           # モデル名・ヘッダー名・エラーコード等の共通定数
   lib/apiKeyStorage.ts    # APIキーの LocalStorage 保存（有効期限 90 日）
+  lib/subtaskLogic.ts     # getAiPlan・AI提案の置き換え/取り消し・細分化・並べ替えの純粋関数（テストあり）
+  lib/taskBackup.ts       # 保存データの検証（sanitizeTasks）とバックアップの書き出し/読み込み/マージ（テストあり）
+  lib/taskUpdates.ts      # タスク・サブタスクの追加/削除/編集/完了/採用/並べ替えの純粋関数（テストあり）
+  lib/safeStorage.ts      # 例外を出さない LocalStorage の読み書き
+  lib/requestGuard.ts     # API Route の同一オリジン確認と簡易レート制限（テストあり）
+  lib/decomposeRequest.ts # /api/decompose の入力検証と Gemini 応答の解釈（テストあり）
 ```
 
 ## アーキテクチャ
 
 ### フロントエンド（`app/page.tsx`）
-- 単一のクライアントコンポーネント `Home` が全状態を `useState` で管理
+- `Home` が状態を持ち、表示は `TaskCard` → `SubtaskRow` に分割。カードへの操作は `TaskCardActions` にまとめて渡す
+- **状態の更新は必ず `setTasks((prev) => 純粋関数(prev, ...))`**（`lib/taskUpdates.ts` / `lib/subtaskLogic.ts`）。AI の結果などと上書きし合わないため、`tasks` を直接参照して更新しない
+- タイトルは保存時に `normalizeTitle` で前後の空白を除き、`MAX_TITLE_LENGTH` で切り詰める
 - データモデル: `Task { id, title, subtasks: Subtask[], isDecomposing? }` / `Subtask { id, title, completed, source? }`（型は `app/types/task.ts`）
   - `source`: `"ai"`（AI提案）/ `"user"`（ユーザーが追加・編集）。旧データの未設定は `"user"` 扱い（消さない側に倒す）
   - AI提案を内容変更して保存すると `"user"` に変わる
 - 永続化は **LocalStorage**（キー: `task_decomposer_tasks`）。バックエンド DB は無い
-  - `isLoaded` フラグで初回復元前の上書き保存を防いでいる
+  - `useStoredTasks` が管理。`isLoaded` フラグで初回復元前の上書き保存を防いでいる
+  - 保存時は `stripRuntimeState` で `isDecomposing` を落とす。他のタブの変更は `storage` イベントで反映（このタブで分解中の表示は保つ）。同じ内容は書き戻さない
+  - 保存に失敗したら（容量不足など）画面上部に警告を出し、バックアップの書き出しを促す
   - タスクは**新しい順**（追加時に先頭へ）。旧バージョンの古い順データは `task_decomposer_task_order` が `"newest-first"` でなければ初回読み込み時に一度だけ反転する
   - 追加直後のカードは `recentlyAddedId` で `animate-slide-in` + `animate-cyber-pulse` を付けて強調
 - ID は `crypto.randomUUID()` で生成
+- LocalStorage からの復元時は `sanitizeTasks` を通す（壊れた要素の除去・ID 重複の振り直し・文字数/件数の切り詰め・`isDecomposing` を落とす）
+- バックアップ: ヘッダーのボタンで `BackupModal` を開く。書き出しは `{ format: "task-decomposer-backup", version: 1, exportedAt, tasks }`（APIキーは含めない）。読み込みは `parseBackup` で検証し、`mergeImportedTasks` で反映。既定は**追加のみ**（同じ ID のタスクは置き換えず、内容が違う件数を表示）。「同じタスクを更新する」にチェックしたときだけ、確認のうえ同じ ID のタスクを読み込んだ内容で置き換える（位置はそのまま）。衝突するサブタスク ID は振り直し
+  - 状態を変えるロジックは `app/lib/` の純粋関数に置き、page.tsx からは `setTasks(prev => ...)` で呼ぶ
 - AIボタンは `getAiPlan` で3つの動作を切り替える（**タスク総数を勝手に増やさない**のが方針）
   - `decompose`（AI分解）: サブタスク無し → 粒度チップ（1/3/5/10）の個数で分解
-  - `regenerate`（AI再提案）: 未完了のAI提案あり → **その個数のまま**作り直す（粒度チップは隠し「残りN個」と表示）
+  - `regenerate`（AI再提案）: 未完了のAI提案あり → **その個数のまま**作り直す（粒度チップは隠し「残りN個」と表示）。上限 10 個を超える分は今回は作り直さずに残す（`targetIds`）
   - `append`（AI追加）: AI提案がすべて完了済み → 粒度チップの個数だけ次の手順を末尾に追加
 - 再提案では**未完了で採用していないAI提案（`isReplaceableByAi`）だけを置き換える**。完了済み・ユーザーの手順・採用したAI提案は残す
   - AI提案の「AI」バッジをタップすると「📌採用」（`Subtask.kept`、永続）に切り替わる。気に入った提案だけ残して他を作り直せる
-  - API には完了済み＋ユーザーの手順＋採用した提案を `existingSubtasks` として、作り直す提案を `rejectedSubtasks` として送り、同じ案が返らないようにする。新しい提案は最初に置き換えたAI提案の位置に挿入（`replaceAiSubtasks`）
-  - 置き換えた内容は `undoStates`（非永続）に控え、「元に戻す」で復元できる
+  - API には完了済み＋ユーザーの手順＋採用した提案を `existingSubtasks` として、作り直す提案を `rejectedSubtasks` として送り、同じ案が返らないようにする。新しい提案は最初に置き換えたAI提案の位置に挿入（`replaceAiSubtasks`）。置き換えるのは依頼時の `targetIds` のうち、まだ手を付けていないものだけ
+  - 置き換えた内容は `undoStates`（非永続）に控え、「元に戻す」で復元できる。新しい提案のうち、その後に完了・採用・編集したものは残す
   - 分解中は `isDecomposing` で、置き換え予定のAI提案を薄く表示し、一覧の下にスケルトン表示
 - サブタスクの ⚡ で `focusSubtask` を送り、そのサブタスクを生成結果（3個）に**差し替える**。処理中の ID は `breakingDownIds`（非永続）で管理
-- 最初の未完了サブタスクに「NEXT」バッジを表示。AI失敗時は `taskErrors` でカード内にエラー表示
-- 集中タイマー: NEXT に「▶ 10分だけやる」（`FOCUS_MINUTES`）。`focusTimer`（同時に1つ・非永続）で管理し、残り時間はタブのタイトルにも表示。時間切れで「完了にする / +5分 / 終了」。対象サブタスクの完了・削除・AIによる置き換えで自動停止
+  - ⚡ と AI再提案は同じタスクで同時に動かさない（どちらかの処理中はもう一方のボタンを無効化）
+- 最初の未完了サブタスクに「次」バッジを表示。AI失敗時は `taskErrors` でカード内にエラー表示
 - サブタスクは ↑↓ ボタンで並べ替え（スマホでも操作しやすいようドラッグは使わない）
 - すべて完了したタスクは自動で折りたたむ（`expandedTaskIds` で開閉、非永続）
 - 使い方: ヘッダーの「?」で `HelpModal` を開く。加えて「採用」は気づきにくいため、未採用のAI提案がある最初のカードに一度だけヒントを出す（✕ か採用操作で `task_decomposer_adopt_tip_dismissed` に記録し、以後出さない）
@@ -83,6 +104,7 @@ app/
 - `INVALID_API_KEY` が返ったらキーを破棄して登録モーダルを再表示。`RATE_LIMITED`（429）は無料枠の上限としてカード内に表示
 
 ### API（`app/api/decompose/route.ts`）
+- 入力の検証・切り詰めは `parseDecomposeRequest`、Gemini 応答の JSON 解釈は `parseGeminiOutput`（壊れた JSON は例外にせず空扱い → 次のモデルへ）。本文が JSON でなければ 400。返す件数は `count` で切り詰める
 - リクエスト: `{ taskTitle: string, count?: number, existingSubtasks?: { title, completed }[], rejectedSubtasks?: string[], focusSubtask?: string }`（count 既定値 5、1〜10 に制限）
   - `focusSubtask` あり → その手順を細分化 / `existingSubtasks` あり → 完了済みの続きから、ユーザーの手順と重複しない「次に取り組む N 個」を提案（個数が少なくても1つを大きくしない） / どちらも無し → 一から分解
   - いずれも「10分以内で終わる・動詞で終わる具体的な行動」を条件としてプロンプトに含める
@@ -90,7 +112,8 @@ app/
   - 正当な目的が考えられるもの（防犯・学習・創作など）まで断らないよう、プロンプトでは「明らかな場合のみ」拒否させている
   - 自傷・自殺に関わる場合は、カード内のエラーで相談窓口（よりそいホットライン）を案内する
 - ヘッダー: `x-gemini-api-key`（必須）
-- レスポンス: `{ subtasks: string[] }`、エラー時は `{ error, code? }`（400 / 401 / 422 / 429 / 500 / 504。`code` は `lib/gemini.ts` の `ERROR_CODES`）
+- レスポンス: `{ subtasks: string[] }`、エラー時は `{ error, code? }`（400 / 401 / 403 / 422 / 429 / 500 / 504。`code` は `lib/gemini.ts` の `ERROR_CODES`）
+- 乱用対策（`lib/requestGuard.ts`、`/api/verify-key` も同様）: `Origin` が無い・別サイトなら 403 + `FORBIDDEN_ORIGIN`。呼び出し元 IP ごとに 1 分 20 回（verify-key は 10 回）を超えたら 429 + `TOO_MANY_REQUESTS`（メモリ上の目安。厳密には Vercel Firewall を使う）
 - Gemini に `responseMimeType: "application/json"` + `responseSchema` で JSON 出力を強制。`thinkingConfig: { thinkingLevel: "low" }` で思考を抑えて高速化
   - `temperature` は指定しない（Gemini 3 系は低温度だと出力がループしやすい）
 - Vercel Hobby の制限に合わせて `export const maxDuration = 15`。`GEMINI_MODELS` を順に試し、各モデルは `AbortController` で 6 秒 / 7 秒でタイムアウト。503・429・タイムアウト・空応答なら次のモデルへフォールバック（APIキー無効時は即 401）
@@ -108,3 +131,8 @@ app/
 - コメント・ログメッセージは日本語で書かれている。既存スタイルに合わせる
 - スタイリングは Tailwind のユーティリティクラスが基本。独自アニメーションは `globals.css` に追加
 - パスエイリアス `@/*` → プロジェクトルート
+
+## セキュリティヘッダー
+
+- `next.config.ts` の `headers()` で CSP（`script-src 'self' 'unsafe-inline'`、`connect-src 'self'` など）・`X-Content-Type-Options`・`Referrer-Policy`・`Permissions-Policy` を付けている
+- APIキーは LocalStorage に平文で保存しているため、外部スクリプトや外部への通信先を追加する場合は CSP の更新と XSS への影響を検討すること

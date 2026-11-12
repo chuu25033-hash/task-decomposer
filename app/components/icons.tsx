@@ -32,3 +32,12 @@ export const CheckIcon = ({ className = "w-3.5 h-3.5" }: { className?: string })
     <path d="M20 6 9 17l-5-5" />
   </svg>
 );
+
+// バックアップ（書き出し・読み込み）
+export const BackupIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg {...base} className={className}>
+    <path d="M12 3v12" />
+    <path d="m7 10 5 5 5-5" />
+    <path d="M5 21h14" />
+  </svg>
+);

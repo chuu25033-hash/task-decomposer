@@ -18,6 +18,10 @@ export const ERROR_CODES = {
   API_KEY_REQUIRED: "API_KEY_REQUIRED",
   INVALID_API_KEY: "INVALID_API_KEY",
   RATE_LIMITED: "RATE_LIMITED",
+  // このアプリのサーバー側の回数制限（短時間に呼び出しすぎ）
+  TOO_MANY_REQUESTS: "TOO_MANY_REQUESTS",
+  // 別のサイトからの呼び出し
+  FORBIDDEN_ORIGIN: "FORBIDDEN_ORIGIN",
   // 倫理に反するタスク（他者や社会への加害・犯罪など）のため分解を拒否
   TASK_REFUSED: "TASK_REFUSED",
   // 自傷・自殺に関わるタスク（拒否したうえで相談窓口を案内する）

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
+import { useModalFocus } from "@/app/hooks/useModalFocus";
 import { API_KEY_HEADER, API_KEY_CREATE_URL } from "@/app/lib/gemini";
 import { API_KEY_TTL_DAYS, saveApiKey, type StoredApiKey } from "@/app/lib/apiKeyStorage";
 
@@ -19,14 +20,9 @@ export default function ApiKeyModal({ current, reason, onSaved, onClear, onClose
   const [isVerifying, setIsVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Esc キーで閉じる
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  // フォーカスの移動・閉じ込めと Esc で閉じる
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(dialogRef, onClose);
 
   const register = async () => {
     const key = input.trim();
@@ -60,17 +56,19 @@ export default function ApiKeyModal({ current, reason, onSaved, onClear, onClose
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="api-key-modal-title"
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md bg-[#141721] border border-cyan-500/40 rounded-2xl p-6 shadow-[0_0_30px_rgba(6,182,212,0.25)] max-h-[90vh] overflow-y-auto"
+        className="w-full max-w-md bg-[#141721] border border-cyan-500/40 rounded-2xl p-6 shadow-[0_0_30px_rgba(6,182,212,0.25)] max-h-[90vh] overflow-y-auto outline-none"
       >
         <div className="flex items-start justify-between gap-4 mb-1">
           <h2 id="api-key-modal-title" className="text-lg font-black text-slate-100 tracking-wide">
             🔑 Gemini APIキーの登録
           </h2>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-sm" title="閉じる">
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-sm" title="閉じる" aria-label="閉じる">
             ✕
           </button>
         </div>

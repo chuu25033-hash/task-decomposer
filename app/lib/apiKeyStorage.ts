@@ -1,4 +1,5 @@
 // ユーザーの Gemini APIキーをこの端末のブラウザ（LocalStorage）にのみ保存する
+import { readStorage, removeStorage, writeStorage } from "@/app/lib/safeStorage";
 
 const STORAGE_KEY = "task_decomposer_gemini_api_key";
 
@@ -13,14 +14,14 @@ export interface StoredApiKey {
 // 期限切れ・破損している場合は null を返す
 export const loadApiKey = (): StoredApiKey | null => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = readStorage(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (typeof parsed?.key !== "string" || typeof parsed?.expiresAt !== "number") {
       return null;
     }
     if (Date.now() > parsed.expiresAt) {
-      localStorage.removeItem(STORAGE_KEY);
+      removeStorage(STORAGE_KEY);
       return null;
     }
     return parsed;
@@ -34,10 +35,11 @@ export const saveApiKey = (key: string): StoredApiKey => {
     key,
     expiresAt: Date.now() + API_KEY_TTL_DAYS * 24 * 60 * 60 * 1000,
   };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+  // 保存できなくても（プライベートモード等）、開いている間は使えるようにする
+  writeStorage(STORAGE_KEY, JSON.stringify(stored));
   return stored;
 };
 
 export const clearApiKey = () => {
-  localStorage.removeItem(STORAGE_KEY);
+  removeStorage(STORAGE_KEY);
 };

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { type ReactNode, useRef } from "react";
+import { useModalFocus } from "@/app/hooks/useModalFocus";
 import { EditIcon, TrashIcon } from "@/app/components/icons";
 
 interface Props {
@@ -66,14 +67,9 @@ const BUTTONS: { chip: ReactNode; text: ReactNode }[] = [
 
 // 使い方モーダル（基本の流れとボタンの意味だけをコンパクトにまとめる）
 export default function HelpModal({ onClose }: Props) {
-  // Esc キーで閉じる
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  // フォーカスの移動・閉じ込めと Esc で閉じる
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(dialogRef, onClose);
 
   return (
     <div
@@ -81,17 +77,19 @@ export default function HelpModal({ onClose }: Props) {
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="help-modal-title"
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md bg-[#141721] border border-cyan-500/40 rounded-2xl p-6 shadow-[0_0_30px_rgba(6,182,212,0.25)] max-h-[90vh] overflow-y-auto"
+        className="w-full max-w-md bg-[#141721] border border-cyan-500/40 rounded-2xl p-6 shadow-[0_0_30px_rgba(6,182,212,0.25)] max-h-[90vh] overflow-y-auto outline-none"
       >
         <div className="flex items-start justify-between gap-4 mb-5">
           <h2 id="help-modal-title" className="text-lg font-black text-slate-100 tracking-wide">
             使い方
           </h2>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-sm" title="閉じる">
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-sm" title="閉じる" aria-label="閉じる">
             ✕
           </button>
         </div>
@@ -101,7 +99,7 @@ export default function HelpModal({ onClose }: Props) {
           {[
             "大きなタスクを入力して「追加」",
             "個数（1/3/5/10）を選んで「⚡AI分解」",
-            "NEXT の手順を「▶ 10分だけやる」。終わったらチェック",
+            "「次」の印がついた手順から取りかかり、終わったらチェック",
           ].map((step, i) => (
             <li key={step} className="flex items-center gap-3">
               <span className="w-6 h-6 rounded-full bg-cyan-950 border border-cyan-400/60 text-cyan-300 text-xs font-black flex items-center justify-center shrink-0">
@@ -113,7 +111,7 @@ export default function HelpModal({ onClose }: Props) {
         </ol>
 
         {/* ボタンの意味 */}
-        <h3 className="text-xs font-mono font-bold text-slate-400 tracking-wider mb-3">BUTTONS</h3>
+        <h3 className="text-xs font-bold text-slate-400 tracking-wider mb-3">ボタンの意味</h3>
         <ul className="space-y-2.5 mb-5">
           {BUTTONS.map((b, i) => (
             <li key={i} className="flex items-center gap-3 text-xs text-slate-300 leading-relaxed">
@@ -126,7 +124,7 @@ export default function HelpModal({ onClose }: Props) {
         <p className="text-[11px] text-slate-500 leading-relaxed">
           ・PCでは手順にマウスを乗せると ⚡ ↑↓ 編集・削除ボタンが表示されます。
           <br />
-          ・タスクはこの端末のブラウザに保存されます。
+          ・タスクはこの端末のブラウザに保存されます。ヘッダーのバックアップボタンから、ファイルへの書き出し・読み込みができます。
         </p>
       </div>
     </div>

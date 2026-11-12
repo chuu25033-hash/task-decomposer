@@ -7,10 +7,11 @@ import {
   GEMINI_MODELS,
   isApiKeyError,
 } from "@/app/lib/gemini";
-import { MAX_TITLE_LENGTH } from "@/app/types/task";
+import { parseDecomposeRequest, parseGeminiOutput } from "@/app/lib/decomposeRequest";
+import { clientKey, createRateLimiter, isSameOriginRequest } from "@/app/lib/requestGuard";
 
-// AI に渡す既存サブタスクの最大件数
-const MAX_EXISTING_SUBTASKS = 50;
+// 1つの呼び出し元から1分あたりに受け付ける回数（通常の操作では届かない程度）
+const allowRequest = createRateLimiter({ limit: 20, windowMs: 60_000 });
 
 // 倫理に反するタスクの拒否（判定は AI に任せ、理由に応じてエラーコードを返す）
 const refusalResponse = (reason: "unethical" | "self_harm") =>
@@ -28,47 +29,32 @@ const refusalResponse = (reason: "unethical" | "self_harm") =>
 export const maxDuration = 15;
 
 export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const rawTitle: unknown = body.taskTitle;
-    // 生成個数は 1〜10 に制限
-    const count = Math.min(Math.max(Number(body.count) || 5, 1), 10);
-    // 既存のサブタスク（補完モード用）
-    // 長すぎる入力で応答が遅く・不安定になるのを防ぐため、件数と文字数を切り詰める
-    const existingSubtasks: { title: string; completed: boolean }[] = Array.isArray(
-      body.existingSubtasks
-    )
-      ? body.existingSubtasks
-          .filter(
-            (s: unknown): s is { title: string; completed: boolean } =>
-              typeof s === "object" && s !== null && typeof (s as { title?: unknown }).title === "string"
-          )
-          .slice(0, MAX_EXISTING_SUBTASKS)
-          .map((s: { title: string; completed: boolean }) => ({
-            title: s.title.slice(0, MAX_TITLE_LENGTH),
-            completed: Boolean(s.completed),
-          }))
-      : [];
-    // 採用されなかった前回のAI案（AI再提案で、同じ案が返らないようにするため）
-    const rejectedSubtasks: string[] = Array.isArray(body.rejectedSubtasks)
-      ? body.rejectedSubtasks
-          .filter((s: unknown): s is string => typeof s === "string" && s.trim() !== "")
-          .slice(0, MAX_EXISTING_SUBTASKS)
-          .map((s: string) => s.slice(0, MAX_TITLE_LENGTH))
-      : [];
-    // 細分化したいサブタスク（行き詰まったステップ）
-    const focusSubtask: string | undefined =
-      typeof body.focusSubtask === "string" && body.focusSubtask.trim()
-        ? body.focusSubtask.slice(0, MAX_TITLE_LENGTH)
-        : undefined;
+  // このアプリの画面以外からの呼び出し（他サイトからの中継利用など）は受け付けない
+  if (!isSameOriginRequest(req)) {
+    return NextResponse.json(
+      { error: "Forbidden", code: ERROR_CODES.FORBIDDEN_ORIGIN },
+      { status: 403 }
+    );
+  }
+  if (!allowRequest(clientKey(req))) {
+    return NextResponse.json(
+      { error: "Too many requests", code: ERROR_CODES.TOO_MANY_REQUESTS },
+      { status: 429 }
+    );
+  }
 
-    if (typeof rawTitle !== "string" || !rawTitle.trim()) {
+  try {
+    // 本文が JSON でない場合も 400 として扱う（500 にしない）
+    const body: unknown = await req.json().catch(() => null);
+    // 入力の検証・切り詰めは lib/decomposeRequest.ts（単体テストあり）
+    const parsedRequest = parseDecomposeRequest(body);
+    if (!parsedRequest) {
       return NextResponse.json(
         { error: "taskTitle is required" },
         { status: 400 }
       );
     }
-    const taskTitle = rawTitle.slice(0, MAX_TITLE_LENGTH);
+    const { taskTitle, count, existingSubtasks, rejectedSubtasks, focusSubtask } = parsedRequest;
 
     // ユーザー自身が登録した APIキーを使う（サーバー側では保存しない）
     const apiKey = req.headers.get(API_KEY_HEADER)?.trim();
@@ -195,20 +181,21 @@ ${safetyRules}
             return refusalResponse("unethical");
           }
 
-          const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          const parsedData = rawText ? JSON.parse(rawText) : null;
-          if (parsedData?.refusal === "unethical" || parsedData?.refusal === "self_harm") {
-            console.warn(`⚠️ ${model}: タスクの分解を拒否しました (${parsedData.refusal})`);
-            return refusalResponse(parsedData.refusal);
+          // 途中で切れた JSON でも例外にせず「空の応答」として次のモデルを試す
+          const { refusal, subtasks: generated } = parseGeminiOutput(
+            data.candidates?.[0]?.content?.parts?.[0]?.text
+          );
+          if (refusal !== "none") {
+            console.warn(`⚠️ ${model}: タスクの分解を拒否しました (${refusal})`);
+            return refusalResponse(refusal);
           }
-          const subtasks: string[] = Array.isArray(parsedData?.subtasks)
-            ? parsedData.subtasks.filter((s: unknown) => typeof s === "string" && s.trim())
-            : [];
+          // 指定より多く返ってきた場合は切り詰める（タスク総数を勝手に増やさない）
+          const subtasks = generated.slice(0, count);
 
           if (subtasks.length > 0) {
             return NextResponse.json({ subtasks });
           }
-          console.warn(`⚠️ ${model}: 空の応答が返されました。次のモデルを試します`);
+          console.warn(`⚠️ ${model}: 空または不正な形式の応答でした。次のモデルを試します`);
           continue;
         }
 

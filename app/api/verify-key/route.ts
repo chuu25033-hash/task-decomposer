@@ -1,10 +1,30 @@
 import { NextResponse } from "next/server";
 import { API_KEY_HEADER, ERROR_CODES, GEMINI_API_BASE, GEMINI_MODEL } from "@/app/lib/gemini";
+import { clientKey, createRateLimiter, isSameOriginRequest } from "@/app/lib/requestGuard";
+
+// キーの総当たりや中継利用を防ぐため、1つの呼び出し元から1分あたりの回数を制限する
+const allowRequest = createRateLimiter({ limit: 10, windowMs: 60_000 });
 
 export const maxDuration = 15;
 
 // 登録前に APIキーが有効かを確認する（モデル情報の取得のみで、生成クォータは消費しない）
 export async function POST(req: Request) {
+  if (!isSameOriginRequest(req)) {
+    return NextResponse.json(
+      { error: "このページ以外からは確認できません。", code: ERROR_CODES.FORBIDDEN_ORIGIN },
+      { status: 403 }
+    );
+  }
+  if (!allowRequest(clientKey(req))) {
+    return NextResponse.json(
+      {
+        error: "短時間に何度も確認しています。1分ほど待ってから再試行してください。",
+        code: ERROR_CODES.TOO_MANY_REQUESTS,
+      },
+      { status: 429 }
+    );
+  }
+
   const apiKey = req.headers.get(API_KEY_HEADER)?.trim();
 
   if (!apiKey) {
