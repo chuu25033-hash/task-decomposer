@@ -59,6 +59,7 @@ app/
   lib/safeStorage.ts      # 例外を出さない LocalStorage の読み書き
   lib/csp.ts              # CSP の組み立てと nonce の生成（テストあり）
   lib/requestGuard.ts     # API Route の同一オリジン確認と簡易レート制限（テストあり）
+  lib/decomposePrompt.ts  # Gemini に送るプロンプトの組み立て（行動の条件・安全性の判断。テストあり）
   lib/decomposeRequest.ts # /api/decompose の入力検証と Gemini 応答の解釈（テストあり）
 proxy.ts                  # ページのリクエストごとに nonce を作り CSP ヘッダーを付ける（Next 16 の Proxy。旧 middleware）
 ```
@@ -114,7 +115,8 @@ proxy.ts                  # ページのリクエストごとに nonce を作り
 - 入力の検証・切り詰めは `parseDecomposeRequest`、Gemini 応答の JSON 解釈は `parseGeminiOutput`（壊れた JSON は例外にせず空扱い → 次のモデルへ）。本文が JSON でなければ 400。返す件数は `count` で切り詰める
 - リクエスト: `{ taskTitle: string, count?: number, existingSubtasks?: { title, completed }[], rejectedSubtasks?: string[], focusSubtask?: string }`（count 既定値 5、1〜10 に制限）
   - `focusSubtask` あり → その手順を細分化 / `existingSubtasks` あり → 完了済みの続きから、ユーザーの手順と重複しない「次に取り組む N 個」を提案（個数が少なくても1つを大きくしない） / どちらも無し → 一から分解
-  - いずれも「10分以内で終わる・動詞で終わる具体的な行動」を条件としてプロンプトに含める
+  - プロンプトは `lib/decomposePrompt.ts` の `buildDecomposePrompt`（テストあり）。いずれも「10分以内で終わる最低限の一歩・動詞で終わる具体的な行動」を条件にする
+  - **誰にでも当てはまる一般的な行動にする**（コンセプトは「スタートアップブースター」）。特定のアプリ・サービス・製品名や、特定の道具・お金・場所・人がある前提の手順は出させない（×「英単語アプリを開く」→ ○「覚えたい英単語を3つ選ぶ」）。ユーザーがタスク名や手順で自分から指定した道具は使ってよい
 - 倫理に反するタスクは拒否する: `responseSchema` の `refusal`（`none` / `unethical` / `self_harm`）を AI に判定させ、拒否なら 422 + `TASK_REFUSED` / `TASK_REFUSED_SELF_HARM` を返す。Gemini の安全フィルタ（`GEMINI_BLOCK_REASONS`）でブロックされた場合も、次のモデルを試さず `TASK_REFUSED`
   - 正当な目的が考えられるもの（防犯・学習・創作など）まで断らないよう、プロンプトでは「明らかな場合のみ」拒否させている
   - 自傷・自殺に関わる場合は、カード内のエラーで相談窓口（よりそいホットライン）を案内する

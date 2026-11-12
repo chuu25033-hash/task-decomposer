@@ -7,6 +7,7 @@ import {
   GEMINI_MODELS,
   isApiKeyError,
 } from "@/app/lib/gemini";
+import { buildDecomposePrompt } from "@/app/lib/decomposePrompt";
 import { parseDecomposeRequest, parseGeminiOutput } from "@/app/lib/decomposeRequest";
 import { clientKey, createRateLimiter, isSameOriginRequest } from "@/app/lib/requestGuard";
 
@@ -54,8 +55,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-    const { taskTitle, count, existingSubtasks, omittedCompletedCount, rejectedSubtasks, focusSubtask } =
-      parsedRequest;
+    const { count } = parsedRequest;
 
     // ユーザー自身が登録した APIキーを使う（サーバー側では保存しない）
     const apiKey = req.headers.get(API_KEY_HEADER)?.trim();
@@ -67,68 +67,8 @@ export async function POST(req: Request) {
       );
     }
 
-    // 各アクションに共通する条件
-    const rules = `条件:
-- 各アクションは「今すぐ10分以内で終わる」大きさにする
-- 動詞で終わる具体的な行動にする（例:「〇〇を開いて△△を3行書き出す」）
-- 考えるだけ・曖昧な表現（「検討する」「頑張る」など）は避ける
-- 実行する順番に並べる`;
-
-    // 手順が多いときは古い完了済みを省いているため、その件数だけ伝える（lib/decomposeRequest.ts）
-    const existingList = [
-      ...(omittedCompletedCount > 0 ? [`- （ほかに、これより前に完了した手順が ${omittedCompletedCount} 件あります）`] : []),
-      ...existingSubtasks.map((s) => `- ${s.completed ? "[完了] " : ""}${s.title}`),
-    ].join("\n");
-
-    // AI再提案時：ユーザーが採用しなかった案と同じ・似た案が返らないようにする
-    const rejectedNote = rejectedSubtasks.length
-      ? `
-
-以下は前回提案したものの、ユーザーが採用しなかった案です。これらと同じ・言い換えただけの案は避け、別のやり方や切り口で提案してください。
-${rejectedSubtasks.map((s) => `- ${s}`).join("\n")}`
-      : "";
-
-    let instruction: string;
-    if (focusSubtask) {
-      // 行き詰まった1ステップを細分化
-      instruction = `最終目標:「${taskTitle}」
-この目標に向けた手順のうち「${focusSubtask}」で手が止まっています。
-この手順を、すぐ着手できるアクションに正確に【${count}個】分解してください。`;
-    } else if (existingList) {
-      // 今の進み具合（完了済み＋ユーザー自身の手順）を踏まえて、次に取り組む手順を提案する
-      // 個数が少なくても1つあたりを大きくしないよう、「目標までの全部」ではなく「次の N 個」を求める
-      instruction = `最終目標:「${taskTitle}」
-現在の状況は以下の通りです。[完了] は実行済み、それ以外はユーザー自身が決めた予定の手順です。
-${existingList}
-
-実行済みの作業の続きから、次に取り組むべきアクションを、ユーザーの予定の手順と重複しないように正確に【${count}個】提案してください。
-目標達成まで${count}個で収まらない場合も、1つのアクションを大きくせず、先に取り組むべきものから順に提案してください。${rejectedNote}`;
-    } else {
-      instruction = `タスク:「${taskTitle}」
-上記を即時着手できる超具体的な最小アクションに正確に【${count}個】分解してください。${rejectedNote}`;
-    }
-
-    // 倫理チェック（タスク名だけでなく、細分化対象や既存の手順も含めて判断させる）
-    // 正当なタスクまで断らないよう、言葉ではなく「目的」で判断させ、明らかな場合に限って拒否する
-    // （軽量モデルは「ピッキング」「ハッキング」などの単語だけで拒否しがちなため、例を具体的に示す）
-    const safetyRules = `安全性の判断（refusal の決め方）:
-- 基本は "none"。危険そうな単語が含まれるかではなく、タスクの「目的」で判断する
-- "unethical" にするのは、目的そのものが他者や社会を害することだと明らかな場合だけ
-  （例:「隣の家の鍵をこじ開けて入る」「元恋人の居場所を突き止める」「他人のSNSに不正ログインする」「人を脅す文面を作る」）
-- 防犯・セキュリティ対策・学習・研究・報道・創作・仕事・害虫駆除などの目的が書かれている、または普通に考えられる場合は "none"
-  （例:「防犯のためにピッキングの手口を調べる」「自宅サーバーの脆弱性を診断する」「推理小説のトリックを考える」）
-- 自傷・自殺そのものが目的の場合だけ "self_harm"
-- "none" 以外のときは subtasks を空配列にする
-- "none" で分解するときは、手口の実行方法ではなく、正当な目的を達成するための行動（公的機関の情報を読む・対策を実施する等）にする`;
-
-    const prompt = `${instruction}
-
-${rules}
-
-${safetyRules}
-
-以下のJSON形式のみで出力してください。
-{"refusal":"none","subtasks":["アクション1","アクション2"]}`;
+    // プロンプトの組み立ては lib/decomposePrompt.ts（誰にでも当てはまる最低限の行動にする条件・安全性の判断）
+    const prompt = buildDecomposePrompt(parsedRequest);
 
     // モデルごとのタイムアウト（合計が maxDuration = 15 秒に収まるように設定）
     const timeoutsMs = [6000, 7000];
