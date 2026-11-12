@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TaskDecomposer
 
-## Getting Started
+大きなタスクを入力すると、AI（Google Gemini）が「10分以内で終わる、すぐ着手できる行動」に分解してくれるタスク管理アプリです。
 
-First, run the development server:
+「レポートを書く」のような大きすぎて手が止まるタスクを、「ノートを開いて見出しを3つ書く」のような小さな行動に変えて、最初の一歩を踏み出しやすくします。
+
+## 主な機能
+
+- **AI分解**: タスクを 1 / 3 / 5 / 10 個の手順に分解
+- **AI再提案**: 気に入らない提案だけを作り直す（完了済み・自分で追加した手順・「📌採用」した提案は残る。「元に戻す」も可能）
+- **AI追加**: 手順をすべて終えたら、続きの手順を追加
+- **⚡ 細分化**: 手が止まった手順を、さらに小さな3つに分ける
+- **手順の管理**: 完了チェック・並べ替え・編集・削除（削除は直後なら元に戻せる）。すべて完了したタスクは自動で折りたたむ
+- **バックアップ**: タスクを JSON ファイルに書き出し・読み込み（別の端末への引き継ぎ用）
+- **安全性**: 他者を害する目的のタスクは分解を断り、自傷に関わる内容には相談窓口を案内する
+
+## 使い方
+
+1. 画面右上の「APIキー未登録」から、無料の Gemini APIキーを登録する（[Google AI Studio](https://aistudio.google.com/apikey) で作成。1分ほど）
+2. 大きなタスクを入力して「追加」
+3. 個数を選んで「⚡AI分解」。「次」の印がついた手順から取りかかり、終わったらチェック
+
+詳しい操作は、画面右上の「?」（使い方）で確認できます。
+
+## データとプライバシー
+
+- タスクと APIキーは、**使っているブラウザの LocalStorage にだけ**保存されます（サーバーにデータベースはありません）。ブラウザのデータを消すと失われるため、必要に応じてバックアップしてください
+- AI を使うと、タスク名と手順、APIキーが**このアプリのサーバーを経由して** Gemini に送られます。サーバーではキーを保存・記録しません
+- Gemini の無料枠では、送った内容が Google の製品改善に使われる場合があります。**個人情報や機密は入力しないでください**
+
+## 開発
+
+必要なもの: Node.js 24 以上
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install        # 依存関係のインストール
+npm run dev        # 開発サーバー（http://localhost:3000）
+npm test           # テスト（Vitest）
+npm run lint       # ESLint
+npm run build      # 本番ビルド
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+環境変数は不要です（APIキーは各ユーザーが画面から登録します）。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 技術構成
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- Next.js 16（App Router）/ React 19 / TypeScript / Tailwind CSS v4
+- Gemini API（REST を `fetch` で直接呼び出し。`gemini-3.5-flash-lite` → 失敗時 `gemini-3.1-flash-lite`）
+- テスト: Vitest + React Testing Library（jsdom）
+- CI: GitHub Actions（push・プルリクエストで lint / テスト / ビルド）
 
-## Learn More
+コードの構成や設計の方針は [CLAUDE.md](./CLAUDE.md) にまとめています。
 
-To learn more about Next.js, take a look at the following resources:
+## デプロイ（Vercel）
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+main ブランチを Vercel にデプロイしています（Hobby プラン想定。API の実行時間は最大 15 秒）。
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+API の乱用を防ぐため、Vercel ダッシュボードの **Firewall** で、`/api/decompose` と `/api/verify-key` に Rate Limiting のルールを追加することを推奨します（アプリ側の回数制限はサーバーのインスタンスごとの目安のため）。

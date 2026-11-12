@@ -10,7 +10,7 @@
 
 ## 技術スタック
 
-- **Next.js 16.3（App Router）** + **React 19** + **TypeScript**（strict）
+- **Next.js 16.4（App Router）** + **React 19** + **TypeScript**（strict）
   - ⚠️ 学習データと API・規約が異なる可能性あり。コードを書く前に `node_modules/next/dist/docs/` の該当ガイドを確認すること（AGENTS.md 参照）
 - **Tailwind CSS v4**（`@tailwindcss/postcss`。`tailwind.config` は無く、`app/globals.css` の `@import "tailwindcss";` で読み込み）
 - **Gemini API**（`gemini-3.5-flash-lite` → 失敗時 `gemini-3.1-flash-lite`。`app/lib/gemini.ts` の `GEMINI_MODELS`）— SDK は使わず、REST エンドポイントを `fetch` で直接呼び出している
@@ -30,7 +30,7 @@ npm test          # Vitest（app/**/*.test.{ts,tsx}）を1回実行
 npm run test:watch # Vitest をウォッチモードで実行
 ```
 
-変更後は `npm test`・`npm run lint`・`npm run build` で確認する。テストは純粋なロジック（`app/lib/*.test.ts`）・API Route（`app/api/decompose/route.test.ts`、Gemini への fetch を差し替え）は node 環境、コンポーネント・フック・画面全体（`*.test.tsx`、先頭の `// @vitest-environment jsdom` で jsdom・React Testing Library）が対象（設定は `vitest.config.mts`、`@/*` エイリアスあり）。
+変更後は `npm test`・`npm run lint`・`npm run build` で確認する（GitHub Actions の `.github/workflows/ci.yml` でも push・PR ごとに実行される）。テストは純粋なロジック（`app/lib/*.test.ts`）・API Route（`app/api/decompose/route.test.ts`、Gemini への fetch を差し替え）は node 環境、コンポーネント・フック・画面全体（`*.test.tsx`、先頭の `// @vitest-environment jsdom` で jsdom・React Testing Library）が対象（設定は `vitest.config.mts`、`@/*` エイリアスあり）。
 
 ## ディレクトリ構成
 
@@ -94,7 +94,7 @@ proxy.ts                  # ページのリクエストごとに nonce を作り
 - サブタスクの ⚡ で `focusSubtask` を送り、そのサブタスクを生成結果（3個）に**差し替える**。処理中の ID は `breakingDownIds`（非永続）で管理
   - ⚡ と AI再提案は同じタスクで同時に動かさない（どちらかの処理中はもう一方のボタンを無効化）
 - AI 呼び出しはブラウザ側でも `AI_REQUEST_TIMEOUT_MS`（20 秒）で打ち切り、`CLIENT_TIMEOUT` としてカード内に表示する（分解中のまま固まらないように）
-- 手順の削除は確認を出さず、画面下に「元に戻す」を 8 秒表示する（`deletedSubtask`・非永続、`insertSubtaskAt` で元の位置に戻す）。タスクの削除は手順があれば確認する
+- タスク・手順の削除は確認を出さず、画面下に「元に戻す」を表示する（`deletedItems`・非永続、最大 10 件。最後の削除から 10 秒で消える）。続けて消した場合は新しい順に1つずつ戻せる（`lib/taskUpdates.ts` の `restoreDeleted`。戻したタスクは `isDecomposing` を持たない）
 - 最初の未完了サブタスクに「次」バッジを表示。AI失敗時は `taskErrors` でカード内にエラー表示
 - サブタスクは ↑↓ ボタンで並べ替え（スマホでも操作しやすいようドラッグは使わない）
 - すべて完了したタスクは自動で折りたたむ（`expandedTaskIds` で開閉、非永続）
@@ -148,5 +148,8 @@ proxy.ts                  # ページのリクエストごとに nonce を作り
 - API の回数制限（`lib/requestGuard.ts`）はサーバーレスのインスタンスごとのメモリで数える目安。厳密に制限するには Vercel ダッシュボードの Firewall で `/api/decompose`・`/api/verify-key` に Rate Limiting ルールを追加する（コードでは設定できない）
 
 ## その他
+
+- 利用者向けの説明は `README.md`（機能・使い方・データとプライバシー・開発・デプロイ）。機能を変えたら合わせて更新する
+- ヘッダーは 400px 未満でロゴを隠し、360px 未満では「APIキー未登録」を「未登録」に縮めてアプリ名が切れないようにしている
 
 - 改行コードは `.gitattributes`（`* text=auto eol=lf`）で LF に統一

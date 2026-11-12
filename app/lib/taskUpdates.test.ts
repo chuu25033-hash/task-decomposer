@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   addTask,
+  captureDeletedSubtask,
+  captureDeletedTask,
   insertSubtaskAt,
+  insertTaskAt,
   normalizeTitle,
   removeSubtask,
+  removeTask,
+  restoreDeleted,
+  type DeletedItem,
   renameSubtask,
   renameTask,
   toggleSubtaskCompleted,
@@ -67,6 +73,28 @@ describe("サブタスクの更新", () => {
     expect(removeSubtask(tasks, "t1", "s1")[0].subtasks.map((s) => s.id)).toEqual(["s2"]);
     // 元の配列は変更しない
     expect(tasks[0].subtasks).toHaveLength(2);
+  });
+
+  it("続けて削除しても、新しい順に1つずつ元の位置へ戻せる", () => {
+    // 手順 s1 を消してから、そのタスクごと消す
+    const history: DeletedItem[] = [];
+    let current = tasks;
+    history.push(captureDeletedSubtask(current, "t1", "s1")!);
+    current = removeSubtask(current, "t1", "s1");
+    history.push(captureDeletedTask(current, "t1")!);
+    current = removeTask(current, "t1");
+    expect(current.map((t) => t.id)).toEqual(["t2"]);
+
+    current = restoreDeleted(current, history.pop()!);
+    expect(current.map((t) => t.id)).toEqual(["t1", "t2"]);
+    current = restoreDeleted(current, history.pop()!);
+    expect(current[0].subtasks.map((s) => s.id)).toEqual(["s1", "s2"]);
+  });
+
+  it("AI処理中に消したタスクを戻しても、生成中の状態は戻さない", () => {
+    const busy = [{ ...tasks[1], isDecomposing: true }];
+    const restored = insertTaskAt([], busy[0], 0);
+    expect(restored[0]).not.toHaveProperty("isDecomposing");
   });
 
   it("削除したサブタスクを元の位置に戻せる（二重には戻さない）", () => {

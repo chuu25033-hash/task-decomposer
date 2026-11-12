@@ -73,6 +73,31 @@ describe("Home", () => {
     expect(titles).toEqual(["「A」を完了にする", "「B」を完了にする"]);
   });
 
+  it("続けて削除しても、手順とタスクを新しい順に1つずつ戻せる", async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ subtasks: ["A", "B"] }));
+    let card = await addTask("片付ける");
+    fireEvent.click(within(card).getByRole("button", { name: /AI分解/ }));
+    await within(card).findByText("A");
+
+    fireEvent.click(within(card).getByLabelText("「A」を削除"));
+    fireEvent.click(within(card).getByLabelText("「B」を削除"));
+    // 確認ダイアログは出さずにタスクごと削除できる
+    fireEvent.click(within(card).getByLabelText("タスク「片付ける」を削除"));
+    expect(screen.queryByRole("article", { name: "片付ける" })).toBeNull();
+    expect(screen.getByText(/ほか2件も戻せます/)).toBeTruthy();
+
+    const undo = () => fireEvent.click(screen.getByRole("button", { name: "元に戻す" }));
+    undo();
+    card = screen.getByRole("article", { name: "片付ける" });
+    undo();
+    undo();
+    const labels = within(card)
+      .getAllByRole("checkbox")
+      .map((el) => el.getAttribute("aria-label"));
+    expect(labels).toEqual(["「A」を完了にする", "「B」を完了にする"]);
+    expect(screen.queryByRole("button", { name: "元に戻す" })).toBeNull();
+  });
+
   it("AI の失敗はカード内に表示し、分解中の状態を解除する", async () => {
     mockFetch.mockResolvedValue(jsonResponse({ error: "x", code: "RATE_LIMITED" }, 429));
     vi.spyOn(console, "error").mockImplementation(() => {});

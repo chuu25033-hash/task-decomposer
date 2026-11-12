@@ -21,17 +21,20 @@ import { mergeImportedTasks } from "@/app/lib/taskBackup";
 import {
   addSubtask,
   addTask,
-  insertSubtaskAt,
+  captureDeletedSubtask,
+  captureDeletedTask,
   moveSubtask,
   normalizeTitle,
   removeSubtask,
   removeTask,
   renameSubtask,
   renameTask,
+  restoreDeleted,
   setDecomposing,
   toggleSubtaskCompleted,
   toggleSubtaskKept,
   updateSubtasks,
+  type DeletedItem,
 } from "@/app/lib/taskUpdates";
 import { isReplaceableByAi, MAX_TITLE_LENGTH, type Subtask, type Task } from "@/app/types/task";
 
@@ -48,8 +51,10 @@ class AiRequestError extends Error {
 const AI_REQUEST_TIMEOUT_MS = 20_000;
 // ブラウザ側のタイムアウト（サーバーからは返らない、画面だけのエラーコード）
 const CLIENT_TIMEOUT = "CLIENT_TIMEOUT";
-// 削除した手順の「元に戻す」を表示しておく時間
-const DELETE_UNDO_MS = 8_000;
+// 削除の「元に戻す」を表示しておく時間（最後の削除から数える）
+const DELETE_UNDO_MS = 10_000;
+// 「元に戻す」で遡れる削除の件数
+const MAX_DELETE_HISTORY = 10;
 
 // 「採用」のヒントを閉じたかどうか（一度閉じたら二度と出さない）
 const ADOPT_TIP_KEY = "task_decomposer_adopt_tip_dismissed";
@@ -93,12 +98,8 @@ export default function Home() {
   // 復元前にヒントが一瞬出ないよう、初期値は「閉じた」扱いにする
   const [isAdoptTipDismissed, setIsAdoptTipDismissed] = useState(true);
   const recentlyAddedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 直前に削除した手順（「元に戻す」用。保存不要）
-  const [deletedSubtask, setDeletedSubtask] = useState<{
-    taskId: string;
-    subtask: Subtask;
-    index: number;
-  } | null>(null);
+  // 削除の履歴（「元に戻す」用。新しいものが末尾。保存不要）
+  const [deletedItems, setDeletedItems] = useState<DeletedItem[]>([]);
 
   // APIキーとヒントの表示状態をマウント後に読み込む（ハイドレーション不一致を避ける）
   useEffect(() => {
@@ -115,12 +116,16 @@ export default function Home() {
     []
   );
 
-  // 「元に戻す」は少し経ったら消す
+  // 「元に戻す」は、最後の削除（または取り消し）から少し経ったら消す
   useEffect(() => {
-    if (!deletedSubtask) return;
-    const id = setTimeout(() => setDeletedSubtask(null), DELETE_UNDO_MS);
+    if (deletedItems.length === 0) return;
+    const id = setTimeout(() => setDeletedItems([]), DELETE_UNDO_MS);
     return () => clearTimeout(id);
-  }, [deletedSubtask]);
+  }, [deletedItems]);
+
+  const rememberDeleted = (item: DeletedItem | null) => {
+    if (item) setDeletedItems((prev) => [...prev, item].slice(-MAX_DELETE_HISTORY));
+  };
 
   const setTaskError = (taskId: string, message: string | null) => {
     setTaskErrors((prev) => (message ? { ...prev, [taskId]: message } : withoutKey(prev, taskId)));
@@ -303,11 +308,9 @@ export default function Home() {
     }
   };
 
-  // タスク削除（サブタスクがある場合は誤操作防止のため確認する）
+  // タスク削除（手順の削除と同じく確認は出さず、しばらく「元に戻す」を表示する）
   const deleteTask = (task: Task) => {
-    if (task.subtasks.length > 0 && !window.confirm(`「${task.title}」を削除しますか？`)) {
-      return;
-    }
+    rememberDeleted(captureDeletedTask(tasks, task.id));
     setTasks((prev) => removeTask(prev, task.id));
     setTaskError(task.id, null);
     setUndoState(task.id, null);
@@ -356,9 +359,7 @@ export default function Home() {
       setTasks((prev) => renameSubtask(prev, taskId, subtaskId, title)),
     // 手順の削除は確認を出さず、代わりにしばらく「元に戻す」を表示する
     deleteSubtask: (taskId, subtaskId) => {
-      const task = tasks.find((t) => t.id === taskId);
-      const index = task?.subtasks.findIndex((s) => s.id === subtaskId) ?? -1;
-      if (task && index !== -1) setDeletedSubtask({ taskId, subtask: task.subtasks[index], index });
+      rememberDeleted(captureDeletedSubtask(tasks, taskId, subtaskId));
       setTasks((prev) => removeSubtask(prev, taskId, subtaskId));
     },
     undoRegenerate,
@@ -372,12 +373,18 @@ export default function Home() {
     openHelp: () => setIsHelpOpen(true),
   };
 
-  const undoDeleteSubtask = () => {
-    if (!deletedSubtask) return;
-    const { taskId, subtask, index } = deletedSubtask;
-    setTasks((prev) => insertSubtaskAt(prev, taskId, subtask, index));
-    setDeletedSubtask(null);
+  // 最後に削除したものから1つずつ戻す
+  const lastDeleted = deletedItems.at(-1);
+  const undoDelete = () => {
+    if (!lastDeleted) return;
+    setTasks((prev) => restoreDeleted(prev, lastDeleted));
+    setDeletedItems((prev) => prev.slice(0, -1));
   };
+  const deletedLabel = !lastDeleted
+    ? ""
+    : lastDeleted.kind === "task"
+    ? `タスク「${lastDeleted.task.title}」`
+    : `「${lastDeleted.subtask.title}」`;
 
   // 「採用」のヒントは、未採用のAI提案がある最初のカードにだけ出す
   // （そのカードが AI 処理中のあいだは出さない）
@@ -394,15 +401,15 @@ export default function Home() {
       <div className="fixed bottom-0 right-0 w-[400px] h-[400px] bg-cyan-500/10 blur-[140px] pointer-events-none -z-10" />
 
       <header className="bg-[#141721]/80 backdrop-blur-2xl border-b border-cyan-500/20 sticky top-0 z-20 shadow-xl shadow-black/50">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-3">
+        <div className="max-w-4xl mx-auto px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-2 sm:gap-3">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <div
               aria-hidden="true"
-              className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-cyan-950 border border-cyan-400/60 flex items-center justify-center text-cyan-300 font-black text-base sm:text-lg shadow-[0_0_15px_rgba(6,182,212,0.4)] shrink-0"
+              className="hidden min-[400px]:flex w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-cyan-950 border border-cyan-400/60 items-center justify-center text-cyan-300 font-black text-base sm:text-lg shadow-[0_0_15px_rgba(6,182,212,0.4)] shrink-0"
             >
               T
             </div>
-            <h1 className="min-w-0 text-lg sm:text-xl font-black tracking-wide sm:tracking-wider truncate bg-gradient-to-r from-cyan-300 via-sky-200 to-cyan-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(6,182,212,0.3)]">
+            <h1 className="min-w-0 text-[15px] min-[400px]:text-lg sm:text-xl font-black tracking-normal sm:tracking-wider truncate bg-gradient-to-r from-cyan-300 via-sky-200 to-cyan-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(6,182,212,0.3)]">
               TaskDecomposer
             </h1>
           </div>
@@ -437,6 +444,7 @@ export default function Home() {
                     : "border-rose-500/50 text-rose-300 hover:bg-rose-950/40"
                 }`}
                 title="Gemini APIキーの設定"
+                aria-label={apiKey ? "APIキー登録済み（設定を開く）" : "APIキー未登録（登録する）"}
               >
                 <span
                   aria-hidden="true"
@@ -450,7 +458,10 @@ export default function Home() {
                     APIキー<span className="hidden sm:inline">登録済み</span>
                   </>
                 ) : (
-                  "APIキー未登録"
+                  /* 320px 幅の端末では「未登録」だけにする（赤い枠と点滅する点で気づける） */
+                  <>
+                    <span className="hidden min-[360px]:inline">APIキー</span>未登録
+                  </>
                 )}
               </button>
             )}
@@ -581,22 +592,27 @@ export default function Home() {
         </div>
       </main>
 
-      {/* 削除した手順の「元に戻す」 */}
-      {deletedSubtask && tasks.some((t) => t.id === deletedSubtask.taskId) && (
+      {/* 削除の「元に戻す」（続けて消した場合は新しい順に1つずつ戻せる） */}
+      {lastDeleted && (
         <div
           role="status"
           className="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 w-[calc(100%-2rem)] max-w-md flex items-center justify-between gap-3 text-xs text-slate-200 bg-[#181b26] border border-cyan-500/40 rounded-xl px-4 py-3 shadow-[0_0_20px_rgba(0,0,0,0.6)]"
         >
-          <span className="min-w-0 truncate">「{deletedSubtask.subtask.title}」を削除しました</span>
+          <span className="min-w-0 truncate">
+            {deletedLabel}を削除しました
+            {deletedItems.length > 1 && (
+              <span className="text-slate-400">（ほか{deletedItems.length - 1}件も戻せます）</span>
+            )}
+          </span>
           <div className="flex items-center gap-3 shrink-0">
             <button
-              onClick={undoDeleteSubtask}
+              onClick={undoDelete}
               className="font-bold text-cyan-300 hover:text-cyan-100 underline underline-offset-2"
             >
               元に戻す
             </button>
             <button
-              onClick={() => setDeletedSubtask(null)}
+              onClick={() => setDeletedItems([])}
               className="text-slate-400 hover:text-slate-200"
               aria-label="閉じる"
               title="閉じる"

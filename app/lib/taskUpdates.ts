@@ -29,6 +29,42 @@ export const addTask = (tasks: Task[], task: Task): Task[] => [task, ...tasks];
 export const removeTask = (tasks: Task[], taskId: string): Task[] =>
   tasks.filter((t) => t.id !== taskId);
 
+// 削除したタスクを元の位置に戻す（「元に戻す」用。既にあれば何もしない）
+// 削除時に AI 処理中だった場合でも、戻したタスクが「生成中」のまま固まらないようにする
+export const insertTaskAt = (tasks: Task[], task: Task, index: number): Task[] => {
+  if (tasks.some((t) => t.id === task.id)) return tasks;
+  const at = Math.min(Math.max(index, 0), tasks.length);
+  const restored: Task = { id: task.id, title: task.title, subtasks: task.subtasks };
+  return [...tasks.slice(0, at), restored, ...tasks.slice(at)];
+};
+
+// 削除の履歴（「元に戻す」用。新しいものが末尾）
+export type DeletedItem =
+  | { kind: "task"; task: Task; index: number }
+  | { kind: "subtask"; taskId: string; subtask: Subtask; index: number };
+
+// 削除の履歴の最後の1件を元に戻す
+export const restoreDeleted = (tasks: Task[], item: DeletedItem): Task[] =>
+  item.kind === "task"
+    ? insertTaskAt(tasks, item.task, item.index)
+    : insertSubtaskAt(tasks, item.taskId, item.subtask, item.index);
+
+// 削除の前に、元に戻すための情報を作る（対象が見つからなければ null）
+export const captureDeletedTask = (tasks: Task[], taskId: string): DeletedItem | null => {
+  const index = tasks.findIndex((t) => t.id === taskId);
+  return index === -1 ? null : { kind: "task", task: tasks[index], index };
+};
+
+export const captureDeletedSubtask = (
+  tasks: Task[],
+  taskId: string,
+  subtaskId: string
+): DeletedItem | null => {
+  const task = tasks.find((t) => t.id === taskId);
+  const index = task?.subtasks.findIndex((s) => s.id === subtaskId) ?? -1;
+  return task && index !== -1 ? { kind: "subtask", taskId, subtask: task.subtasks[index], index } : null;
+};
+
 export const renameTask = (tasks: Task[], taskId: string, rawTitle: string): Task[] => {
   const title = normalizeTitle(rawTitle);
   if (!title) return tasks;

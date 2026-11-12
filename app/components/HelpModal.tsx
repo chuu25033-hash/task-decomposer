@@ -61,7 +61,7 @@ const BUTTONS: { chip: ReactNode; text: ReactNode }[] = [
         <TrashIcon />
       </Chip>
     ),
-    text: "削除（手順の横は手順だけ、タスク名の横はタスクごと）",
+    text: "削除（手順の横は手順だけ、タスク名の横はタスクごと）。消した直後は画面下の「元に戻す」で戻せます",
   },
 ];
 
