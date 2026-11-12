@@ -54,7 +54,8 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-    const { taskTitle, count, existingSubtasks, rejectedSubtasks, focusSubtask } = parsedRequest;
+    const { taskTitle, count, existingSubtasks, omittedCompletedCount, rejectedSubtasks, focusSubtask } =
+      parsedRequest;
 
     // ユーザー自身が登録した APIキーを使う（サーバー側では保存しない）
     const apiKey = req.headers.get(API_KEY_HEADER)?.trim();
@@ -73,9 +74,11 @@ export async function POST(req: Request) {
 - 考えるだけ・曖昧な表現（「検討する」「頑張る」など）は避ける
 - 実行する順番に並べる`;
 
-    const existingList = existingSubtasks
-      .map((s) => `- ${s.completed ? "[完了] " : ""}${s.title}`)
-      .join("\n");
+    // 手順が多いときは古い完了済みを省いているため、その件数だけ伝える（lib/decomposeRequest.ts）
+    const existingList = [
+      ...(omittedCompletedCount > 0 ? [`- （ほかに、これより前に完了した手順が ${omittedCompletedCount} 件あります）`] : []),
+      ...existingSubtasks.map((s) => `- ${s.completed ? "[完了] " : ""}${s.title}`),
+    ].join("\n");
 
     // AI再提案時：ユーザーが採用しなかった案と同じ・似た案が返らないようにする
     const rejectedNote = rejectedSubtasks.length

@@ -29,7 +29,7 @@ const BUTTONS: { chip: ReactNode; text: ReactNode }[] = [
   {
     chip: (
       <span className="flex gap-1 shrink-0">
-        <Chip className="min-w-0 border-cyan-500/30 text-cyan-500/70">AI</Chip>
+        <Chip className="min-w-0 border-cyan-500/50 text-cyan-400">AI</Chip>
         <Chip className="min-w-0 border-amber-400/70 bg-amber-400/15 text-amber-300 font-bold">📌採用</Chip>
       </span>
     ),
@@ -89,7 +89,7 @@ export default function HelpModal({ onClose }: Props) {
           <h2 id="help-modal-title" className="text-lg font-black text-slate-100 tracking-wide">
             使い方
           </h2>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-sm" title="閉じる" aria-label="閉じる">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 text-sm" title="閉じる" aria-label="閉じる">
             ✕
           </button>
         </div>
@@ -121,10 +121,12 @@ export default function HelpModal({ onClose }: Props) {
           ))}
         </ul>
 
-        <p className="text-[11px] text-slate-500 leading-relaxed">
+        <p className="text-[11px] text-slate-400 leading-relaxed">
           ・PCでは手順にマウスを乗せると ⚡ ↑↓ 編集・削除ボタンが表示されます。
           <br />
           ・タスクはこの端末のブラウザに保存されます。ヘッダーのバックアップボタンから、ファイルへの書き出し・読み込みができます。
+          <br />
+          ・AIを使うと、タスク名と手順が Gemini（Google）に送られます。無料枠では製品改善に使われる場合があるため、個人情報や機密は入力しないでください。
         </p>
       </div>
     </div>

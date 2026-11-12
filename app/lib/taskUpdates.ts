@@ -50,6 +50,19 @@ export const addSubtask = (tasks: Task[], taskId: string, subtask: Subtask): Tas
 export const removeSubtask = (tasks: Task[], taskId: string, subtaskId: string): Task[] =>
   updateSubtasks(tasks, taskId, (subtasks) => subtasks.filter((s) => s.id !== subtaskId));
 
+// 削除したサブタスクを元の位置に戻す（「元に戻す」用。位置は今の件数に収め、既にあれば何もしない）
+export const insertSubtaskAt = (
+  tasks: Task[],
+  taskId: string,
+  subtask: Subtask,
+  index: number
+): Task[] =>
+  updateSubtasks(tasks, taskId, (subtasks) => {
+    if (subtasks.some((s) => s.id === subtask.id)) return subtasks;
+    const at = Math.min(Math.max(index, 0), subtasks.length);
+    return [...subtasks.slice(0, at), subtask, ...subtasks.slice(at)];
+  });
+
 export const toggleSubtaskCompleted = (tasks: Task[], taskId: string, subtaskId: string): Task[] =>
   updateSubtask(tasks, taskId, subtaskId, (s) => ({ ...s, completed: !s.completed }));
 

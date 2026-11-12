@@ -1,0 +1,4 @@
+# 改行コードを LF に統一する（Windows の autocrlf による混在・警告を防ぐ）
+* text=auto eol=lf
+*.png binary
+*.ico binary

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addTask,
+  insertSubtaskAt,
   normalizeTitle,
   removeSubtask,
   renameSubtask,
@@ -66,5 +67,17 @@ describe("サブタスクの更新", () => {
     expect(removeSubtask(tasks, "t1", "s1")[0].subtasks.map((s) => s.id)).toEqual(["s2"]);
     // 元の配列は変更しない
     expect(tasks[0].subtasks).toHaveLength(2);
+  });
+
+  it("削除したサブタスクを元の位置に戻せる（二重には戻さない）", () => {
+    const removed = removeSubtask(tasks, "t1", "s1");
+    const restored = insertSubtaskAt(removed, "t1", tasks[0].subtasks[0], 0);
+    expect(restored[0].subtasks.map((s) => s.id)).toEqual(["s1", "s2"]);
+    expect(insertSubtaskAt(restored, "t1", tasks[0].subtasks[0], 0)[0].subtasks).toHaveLength(2);
+    // 位置が今の件数を超えていたら末尾に入れる
+    expect(insertSubtaskAt(removed, "t1", tasks[0].subtasks[0], 99)[0].subtasks.map((s) => s.id)).toEqual([
+      "s2",
+      "s1",
+    ]);
   });
 });

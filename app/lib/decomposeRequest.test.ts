@@ -5,6 +5,7 @@ import {
   MAX_EXISTING_SUBTASKS,
   parseDecomposeRequest,
   parseGeminiOutput,
+  selectExistingSubtasks,
 } from "@/app/lib/decomposeRequest";
 import { MAX_TITLE_LENGTH } from "@/app/types/task";
 
@@ -22,6 +23,7 @@ describe("parseDecomposeRequest", () => {
       taskTitle: "部屋を片付ける",
       count: DEFAULT_COUNT,
       existingSubtasks: [],
+      omittedCompletedCount: 0,
       rejectedSubtasks: [],
       focusSubtask: undefined,
     });
@@ -52,6 +54,20 @@ describe("parseDecomposeRequest", () => {
     expect(result?.existingSubtasks).toHaveLength(MAX_EXISTING_SUBTASKS);
     expect(result?.existingSubtasks[0].title).toHaveLength(MAX_TITLE_LENGTH);
     expect(result?.rejectedSubtasks).toHaveLength(MAX_EXISTING_SUBTASKS);
+    expect(result?.omittedCompletedCount).toBe(5);
+  });
+
+  it("手順が多いときは未完了を優先し、残りは直近の完了済みで埋める（順番は保つ）", () => {
+    const subtasks = [
+      ...Array.from({ length: 60 }, (_, i) => ({ title: `done${i}`, completed: true })),
+      { title: "todo", completed: false },
+    ];
+    const { selected, omittedCompletedCount } = selectExistingSubtasks(subtasks);
+    expect(selected).toHaveLength(MAX_EXISTING_SUBTASKS);
+    expect(selected.at(-1)?.title).toBe("todo");
+    // 古い完了済みから省く
+    expect(selected[0].title).toBe("done11");
+    expect(omittedCompletedCount).toBe(11);
   });
 
   it("不正な要素は取り除き、completed は true のときだけ完了扱いにする", () => {

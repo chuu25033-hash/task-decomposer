@@ -68,7 +68,7 @@ export default function ApiKeyModal({ current, reason, onSaved, onClear, onClose
           <h2 id="api-key-modal-title" className="text-lg font-black text-slate-100 tracking-wide">
             🔑 Gemini APIキーの登録
           </h2>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-sm" title="閉じる" aria-label="閉じる">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 text-sm" title="閉じる" aria-label="閉じる">
             ✕
           </button>
         </div>
@@ -139,7 +139,7 @@ export default function ApiKeyModal({ current, reason, onSaved, onClear, onClose
                   autoComplete="off"
                   spellCheck={false}
                   autoFocus
-                  className="flex-1 min-w-0 bg-[#0d0e14] border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-600 font-mono focus:outline-none focus:border-cyan-400/80"
+                  className="flex-1 min-w-0 bg-[#0d0e14] border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-400 font-mono focus:outline-none focus:border-cyan-400/80"
                 />
                 <button
                   onClick={register}
@@ -154,12 +154,17 @@ export default function ApiKeyModal({ current, reason, onSaved, onClear, onClose
           </li>
         </ol>
 
-        <p className="text-[11px] text-slate-500 leading-relaxed">
+        <div className="mb-4 text-[11px] text-amber-100 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2 leading-relaxed">
+          ⚠️ 無料枠では、送った内容（タスク名・手順）が Google の製品改善に使われる場合があります。
+          <b className="text-amber-300">個人情報や仕事の機密は入力しないでください。</b>
+        </div>
+
+        <p className="text-[11px] text-slate-400 leading-relaxed">
           ・キーはこの端末のブラウザにだけ保存され、{API_KEY_TTL_DAYS}日間は再登録不要です。
           <br />
-          ・AIを使うときだけサーバー経由で Gemini に送られ、サーバーには保存されません。
+          ・AIを使うたびに、キーとタスクの内容は<b>このアプリのサーバーを経由して</b> Gemini に送られます。サーバーではキーを保存・記録しません。
           <br />
-          ・キーは他人に教えないでください。
+          ・キーは他人に教えないでください。不安なときは Google AI Studio でいつでもキーを削除できます。
         </p>
       </div>
     </div>

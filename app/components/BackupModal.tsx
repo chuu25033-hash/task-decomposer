@@ -109,7 +109,7 @@ export default function BackupModal({ tasks, onImport, onClose }: Props) {
           <h2 id="backup-modal-title" className="text-lg font-black text-slate-100 tracking-wide">
             バックアップ
           </h2>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-sm" title="閉じる" aria-label="閉じる">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 text-sm" title="閉じる" aria-label="閉じる">
             ✕
           </button>
         </div>
@@ -169,7 +169,7 @@ export default function BackupModal({ tasks, onImport, onClose }: Props) {
           </p>
         )}
 
-        <p className="mt-5 text-[11px] text-slate-500 leading-relaxed">
+        <p className="mt-5 text-[11px] text-slate-400 leading-relaxed">
           ・読み込んだタスクは今のタスクに追加されます。既にあるタスクは「同じタスクを更新する」を選んだときだけ置き換えます。
           <br />
           ・APIキーはファイルに含まれません。

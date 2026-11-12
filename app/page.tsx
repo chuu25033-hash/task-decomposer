@@ -21,6 +21,7 @@ import { mergeImportedTasks } from "@/app/lib/taskBackup";
 import {
   addSubtask,
   addTask,
+  insertSubtaskAt,
   moveSubtask,
   normalizeTitle,
   removeSubtask,
@@ -43,6 +44,13 @@ class AiRequestError extends Error {
   }
 }
 
+// AI 呼び出しをブラウザ側で打ち切るまでの時間（サーバーの maxDuration = 15 秒より少し長くする）
+const AI_REQUEST_TIMEOUT_MS = 20_000;
+// ブラウザ側のタイムアウト（サーバーからは返らない、画面だけのエラーコード）
+const CLIENT_TIMEOUT = "CLIENT_TIMEOUT";
+// 削除した手順の「元に戻す」を表示しておく時間
+const DELETE_UNDO_MS = 8_000;
+
 // 「採用」のヒントを閉じたかどうか（一度閉じたら二度と出さない）
 const ADOPT_TIP_KEY = "task_decomposer_adopt_tip_dismissed";
 
@@ -51,6 +59,7 @@ const AI_ERROR_MESSAGES: Record<string, string> = {
   [ERROR_CODES.RATE_LIMITED]:
     "Gemini の無料枠の利用上限に達しました。しばらく待ってから再試行してください。",
   [ERROR_CODES.TOO_MANY_REQUESTS]: "短時間に何度も呼び出されています。1分ほど待ってから再試行してください。",
+  [CLIENT_TIMEOUT]: "AIの応答に時間がかかりすぎたため中断しました。通信環境を確認して再試行してください。",
   [ERROR_CODES.TASK_REFUSED]: "このタスクは、他者や社会に害を与えるおそれがあるため分解できません。",
   [ERROR_CODES.TASK_REFUSED_SELF_HARM]:
     "このタスクは分解できません。つらい気持ちを抱えているなら、ひとりで抱え込まずに相談してください。よりそいホットライン 0120-279-338（24時間・無料）",
@@ -84,6 +93,12 @@ export default function Home() {
   // 復元前にヒントが一瞬出ないよう、初期値は「閉じた」扱いにする
   const [isAdoptTipDismissed, setIsAdoptTipDismissed] = useState(true);
   const recentlyAddedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 直前に削除した手順（「元に戻す」用。保存不要）
+  const [deletedSubtask, setDeletedSubtask] = useState<{
+    taskId: string;
+    subtask: Subtask;
+    index: number;
+  } | null>(null);
 
   // APIキーとヒントの表示状態をマウント後に読み込む（ハイドレーション不一致を避ける）
   useEffect(() => {
@@ -99,6 +114,13 @@ export default function Home() {
     },
     []
   );
+
+  // 「元に戻す」は少し経ったら消す
+  useEffect(() => {
+    if (!deletedSubtask) return;
+    const id = setTimeout(() => setDeletedSubtask(null), DELETE_UNDO_MS);
+    return () => clearTimeout(id);
+  }, [deletedSubtask]);
 
   const setTaskError = (taskId: string, message: string | null) => {
     setTaskErrors((prev) => (message ? { ...prev, [taskId]: message } : withoutKey(prev, taskId)));
@@ -170,18 +192,31 @@ export default function Home() {
     },
     key: string
   ): Promise<Subtask[]> => {
-    const res = await fetch("/api/decompose", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", [API_KEY_HEADER]: key },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json().catch(() => ({}));
+    // 通信が途中で止まっても「生成中...」のままにならないよう、一定時間で打ち切る
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+    let res: Response;
+    let data: { subtasks?: unknown; error?: string; code?: string };
+    try {
+      res = await fetch("/api/decompose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", [API_KEY_HEADER]: key },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      data = await res.json().catch(() => ({}));
+    } catch (e) {
+      if (controller.signal.aborted) throw new AiRequestError("timeout", CLIENT_TIMEOUT);
+      throw e;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!res.ok || !Array.isArray(data.subtasks) || data.subtasks.length === 0) {
       throw new AiRequestError(data.error ?? `HTTP ${res.status}`, data.code);
     }
 
-    return data.subtasks.map((subTitle: string) => ({
+    return (data.subtasks as string[]).map((subTitle) => ({
       id: crypto.randomUUID(),
       title: subTitle,
       completed: false,
@@ -319,7 +354,13 @@ export default function Home() {
       setTasks((prev) => moveSubtask(prev, taskId, subtaskId, direction)),
     renameSubtask: (taskId, subtaskId, title) =>
       setTasks((prev) => renameSubtask(prev, taskId, subtaskId, title)),
-    deleteSubtask: (taskId, subtaskId) => setTasks((prev) => removeSubtask(prev, taskId, subtaskId)),
+    // 手順の削除は確認を出さず、代わりにしばらく「元に戻す」を表示する
+    deleteSubtask: (taskId, subtaskId) => {
+      const task = tasks.find((t) => t.id === taskId);
+      const index = task?.subtasks.findIndex((s) => s.id === subtaskId) ?? -1;
+      if (task && index !== -1) setDeletedSubtask({ taskId, subtask: task.subtasks[index], index });
+      setTasks((prev) => removeSubtask(prev, taskId, subtaskId));
+    },
     undoRegenerate,
     dismissUndo: (taskId) => setUndoState(taskId, null),
     dismissError: (taskId) => setTaskError(taskId, null),
@@ -329,6 +370,13 @@ export default function Home() {
       ),
     dismissAdoptTip,
     openHelp: () => setIsHelpOpen(true),
+  };
+
+  const undoDeleteSubtask = () => {
+    if (!deletedSubtask) return;
+    const { taskId, subtask, index } = deletedSubtask;
+    setTasks((prev) => insertSubtaskAt(prev, taskId, subtask, index));
+    setDeletedSubtask(null);
   };
 
   // 「採用」のヒントは、未採用のAI提案がある最初のカードにだけ出す
@@ -470,7 +518,7 @@ export default function Home() {
             placeholder="大きなタスクを入力... (例: レポートを提出する)"
             aria-label="新しいタスク"
             maxLength={MAX_TITLE_LENGTH}
-            className="flex-1 min-w-0 px-4 py-3 text-slate-100 placeholder-slate-500 bg-transparent focus:outline-none text-sm font-medium tracking-wide"
+            className="flex-1 min-w-0 px-4 py-3 text-slate-100 placeholder-slate-400 bg-transparent focus:outline-none text-sm font-medium tracking-wide"
           />
           <button
             onClick={submitTask}
@@ -501,7 +549,7 @@ export default function Home() {
           {!isLoaded ? (
             <div role="status" className="text-center py-16 bg-[#141721] rounded-2xl border border-slate-800">
               <div className="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-              <p className="text-slate-500 text-xs">読み込み中...</p>
+              <p className="text-slate-400 text-xs">読み込み中...</p>
             </div>
           ) : tasks.length === 0 ? (
             <div className="text-center py-16 bg-[#141721] rounded-2xl border border-dashed border-slate-800">
@@ -512,7 +560,7 @@ export default function Home() {
                 ⚡
               </div>
               <p className="text-slate-200 font-bold text-sm mb-1">タスクはまだありません</p>
-              <p className="text-slate-500 text-xs">大きなタスクを入力して、AIで分解してみましょう</p>
+              <p className="text-slate-400 text-xs">大きなタスクを入力して、AIで分解してみましょう</p>
             </div>
           ) : (
             tasks.map((task) => (
@@ -532,6 +580,32 @@ export default function Home() {
           )}
         </div>
       </main>
+
+      {/* 削除した手順の「元に戻す」 */}
+      {deletedSubtask && tasks.some((t) => t.id === deletedSubtask.taskId) && (
+        <div
+          role="status"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 w-[calc(100%-2rem)] max-w-md flex items-center justify-between gap-3 text-xs text-slate-200 bg-[#181b26] border border-cyan-500/40 rounded-xl px-4 py-3 shadow-[0_0_20px_rgba(0,0,0,0.6)]"
+        >
+          <span className="min-w-0 truncate">「{deletedSubtask.subtask.title}」を削除しました</span>
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              onClick={undoDeleteSubtask}
+              className="font-bold text-cyan-300 hover:text-cyan-100 underline underline-offset-2"
+            >
+              元に戻す
+            </button>
+            <button
+              onClick={() => setDeletedSubtask(null)}
+              className="text-slate-400 hover:text-slate-200"
+              aria-label="閉じる"
+              title="閉じる"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

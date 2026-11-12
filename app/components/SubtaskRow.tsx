@@ -93,7 +93,7 @@ export default function SubtaskRow({
         ) : (
           <span
             className={`flex-1 min-w-0 text-sm whitespace-normal break-words transition-all duration-300 ${
-              subtask.completed ? "line-through text-slate-500 font-normal" : "text-slate-200 font-medium"
+              subtask.completed ? "line-through text-slate-400 font-normal" : "text-slate-200 font-medium"
             }`}
           >
             {isNext && !isBreakingDown && (
@@ -103,7 +103,7 @@ export default function SubtaskRow({
             )}
             {isAi &&
               (subtask.completed ? (
-                <span className="inline-block mr-2 px-1 rounded border border-cyan-500/30 text-cyan-500/70 text-[10px] font-mono align-middle">
+                <span className="inline-block mr-2 px-1 rounded border border-cyan-500/50 text-cyan-400 text-[10px] font-mono align-middle">
                   AI
                 </span>
               ) : (
@@ -115,7 +115,7 @@ export default function SubtaskRow({
                   className={`inline-block mr-2 px-1 rounded border text-[10px] font-mono align-middle transition-all active:scale-95 disabled:cursor-not-allowed ${
                     subtask.kept
                       ? "border-amber-400/70 bg-amber-400/15 text-amber-300 font-bold"
-                      : "border-cyan-500/30 text-cyan-500/70 hover:border-cyan-400 hover:text-cyan-300"
+                      : "border-cyan-500/50 text-cyan-400 hover:border-cyan-400 hover:text-cyan-300"
                   }`}
                   title={
                     subtask.kept
@@ -134,7 +134,7 @@ export default function SubtaskRow({
       {isBreakingDown ? (
         <span
           role="status"
-          className="text-[10px] text-cyan-400/70 shrink-0 self-end sm:self-auto mt-1 sm:mt-0 sm:ml-2 animate-pulse"
+          className="text-[10px] text-cyan-400 shrink-0 self-end sm:self-auto mt-1 sm:mt-0 sm:ml-2 animate-pulse"
         >
           分解中...
         </span>
@@ -157,7 +157,7 @@ export default function SubtaskRow({
               <button
                 onClick={() => onMove(-1)}
                 disabled={isFirst}
-                className="text-xs font-mono text-slate-500 hover:text-slate-200 px-1.5 py-1 disabled:opacity-20 disabled:cursor-not-allowed"
+                className="text-xs font-mono text-slate-400 hover:text-slate-200 px-1.5 py-1 disabled:opacity-20 disabled:cursor-not-allowed"
                 title="上へ移動"
                 aria-label={`「${title}」を上へ移動`}
               >
@@ -166,7 +166,7 @@ export default function SubtaskRow({
               <button
                 onClick={() => onMove(1)}
                 disabled={isLast}
-                className="text-xs font-mono text-slate-500 hover:text-slate-200 px-1.5 py-1 disabled:opacity-20 disabled:cursor-not-allowed"
+                className="text-xs font-mono text-slate-400 hover:text-slate-200 px-1.5 py-1 disabled:opacity-20 disabled:cursor-not-allowed"
                 title="下へ移動"
                 aria-label={`「${title}」を下へ移動`}
               >
@@ -188,7 +188,7 @@ export default function SubtaskRow({
           ) : (
             <button
               onClick={() => edit.start(title)}
-              className="text-slate-500 hover:text-slate-300 px-2 py-1"
+              className="text-slate-400 hover:text-slate-300 px-2 py-1"
               title="手順を編集"
               aria-label={`「${title}」を編集`}
             >
@@ -197,7 +197,7 @@ export default function SubtaskRow({
           )}
           <button
             onClick={onDelete}
-            className="text-slate-600 hover:text-rose-400 px-2 py-1"
+            className="text-slate-400 hover:text-rose-400 px-2 py-1"
             title="手順を削除"
             aria-label={`「${title}」を削除`}
           >

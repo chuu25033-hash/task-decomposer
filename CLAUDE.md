@@ -30,13 +30,13 @@ npm test          # Vitest（app/**/*.test.{ts,tsx}）を1回実行
 npm run test:watch # Vitest をウォッチモードで実行
 ```
 
-変更後は `npm test`・`npm run lint`・`npm run build` で確認する。テストは純粋なロジック（`app/lib/*.test.ts`、node 環境）と、コンポーネント（`app/components/*.test.tsx`、先頭の `// @vitest-environment jsdom` で jsdom・React Testing Library）が対象（設定は `vitest.config.mts`、`@/*` エイリアスあり）。
+変更後は `npm test`・`npm run lint`・`npm run build` で確認する。テストは純粋なロジック（`app/lib/*.test.ts`）・API Route（`app/api/decompose/route.test.ts`、Gemini への fetch を差し替え）は node 環境、コンポーネント・フック・画面全体（`*.test.tsx`、先頭の `// @vitest-environment jsdom` で jsdom・React Testing Library）が対象（設定は `vitest.config.mts`、`@/*` エイリアスあり）。
 
 ## ディレクトリ構成
 
 ```
 app/
-  layout.tsx              # ルートレイアウト（metadata, lang="ja"）
+  layout.tsx              # ルートレイアウト（metadata, lang="ja"）。CSP の nonce のため connection() で動的レンダリング
   page.tsx                # メイン画面（"use client"。状態管理と AI 呼び出し。カードの表示は TaskCard に分割）
   globals.css             # Tailwind 読み込み + カスタムアニメーション（pop, cyber-shimmer, cyber-glow 等）
   types/task.ts           # Task / Subtask 型定義
@@ -57,8 +57,10 @@ app/
   lib/taskBackup.ts       # 保存データの検証（sanitizeTasks）とバックアップの書き出し/読み込み/マージ（テストあり）
   lib/taskUpdates.ts      # タスク・サブタスクの追加/削除/編集/完了/採用/並べ替えの純粋関数（テストあり）
   lib/safeStorage.ts      # 例外を出さない LocalStorage の読み書き
+  lib/csp.ts              # CSP の組み立てと nonce の生成（テストあり）
   lib/requestGuard.ts     # API Route の同一オリジン確認と簡易レート制限（テストあり）
   lib/decomposeRequest.ts # /api/decompose の入力検証と Gemini 応答の解釈（テストあり）
+proxy.ts                  # ページのリクエストごとに nonce を作り CSP ヘッダーを付ける（Next 16 の Proxy。旧 middleware）
 ```
 
 ## アーキテクチャ
@@ -91,11 +93,16 @@ app/
   - 分解中は `isDecomposing` で、置き換え予定のAI提案を薄く表示し、一覧の下にスケルトン表示
 - サブタスクの ⚡ で `focusSubtask` を送り、そのサブタスクを生成結果（3個）に**差し替える**。処理中の ID は `breakingDownIds`（非永続）で管理
   - ⚡ と AI再提案は同じタスクで同時に動かさない（どちらかの処理中はもう一方のボタンを無効化）
+- AI 呼び出しはブラウザ側でも `AI_REQUEST_TIMEOUT_MS`（20 秒）で打ち切り、`CLIENT_TIMEOUT` としてカード内に表示する（分解中のまま固まらないように）
+- 手順の削除は確認を出さず、画面下に「元に戻す」を 8 秒表示する（`deletedSubtask`・非永続、`insertSubtaskAt` で元の位置に戻す）。タスクの削除は手順があれば確認する
 - 最初の未完了サブタスクに「次」バッジを表示。AI失敗時は `taskErrors` でカード内にエラー表示
 - サブタスクは ↑↓ ボタンで並べ替え（スマホでも操作しやすいようドラッグは使わない）
 - すべて完了したタスクは自動で折りたたむ（`expandedTaskIds` で開閉、非永続）
 - 使い方: ヘッダーの「?」で `HelpModal` を開く。加えて「採用」は気づきにくいため、未採用のAI提案がある最初のカードに一度だけヒントを出す（✕ か採用操作で `task_decomposer_adopt_tip_dismissed` に記録し、以後出さない）
-- タスク名・サブタスク名は `MAX_TITLE_LENGTH`（200文字）まで。API 側でも切り詰め、既存サブタスクは最大 50 件まで送る
+- タスク名・サブタスク名は `MAX_TITLE_LENGTH`（200文字）まで。API 側でも切り詰める
+- 既存サブタスクは全件（最大 200）送り、API 側の `selectExistingSubtasks` で 50 件に絞る（未完了を優先し、残りは直近の完了済み。省いた完了済みの件数はプロンプトで伝える）
+- 入力内容が Gemini（無料枠では Google の製品改善に使われうる）に送られること、キーがこのアプリのサーバーを経由することを、APIキー登録モーダルと使い方に明記している
+- 文字色はコントラスト確保のため、暗い背景上の本文に `text-slate-500/600` を使わない（`text-slate-400` 以上）
 
 ### APIキー（ユーザー持ち込み方式）
 - 各ユーザーが自分の Gemini APIキーを登録して使う。サーバー側の共通キーは使わない
@@ -134,5 +141,12 @@ app/
 
 ## セキュリティヘッダー
 
-- `next.config.ts` の `headers()` で CSP（`script-src 'self' 'unsafe-inline'`、`connect-src 'self'` など）・`X-Content-Type-Options`・`Referrer-Policy`・`Permissions-Policy` を付けている
-- APIキーは LocalStorage に平文で保存しているため、外部スクリプトや外部への通信先を追加する場合は CSP の更新と XSS への影響を検討すること
+- CSP は `proxy.ts` でリクエストごとの nonce を付ける方式（`script-src 'self' 'nonce-…' 'strict-dynamic'`。`'unsafe-inline'` は使わない。開発時のみ `'unsafe-eval'`）。Next.js が自身のスクリプトに nonce を自動で付けるため、ページは動的レンダリング（`app/layout.tsx` の `connection()`）
+  - `style-src` は要素の style 属性（進捗バーの幅）のため `'unsafe-inline'` を残している
+  - 外部スクリプトや外部への通信先を追加する場合は `lib/csp.ts` を更新すること（APIキーを LocalStorage に平文で置いているため XSS の影響が大きい）
+- その他のヘッダー（`X-Content-Type-Options`・`Referrer-Policy`・`Permissions-Policy`）は `next.config.ts` の `headers()`
+- API の回数制限（`lib/requestGuard.ts`）はサーバーレスのインスタンスごとのメモリで数える目安。厳密に制限するには Vercel ダッシュボードの Firewall で `/api/decompose`・`/api/verify-key` に Rate Limiting ルールを追加する（コードでは設定できない）
+
+## その他
+
+- 改行コードは `.gitattributes`（`* text=auto eol=lf`）で LF に統一

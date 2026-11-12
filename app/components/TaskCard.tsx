@@ -190,7 +190,7 @@ export default function TaskCard({
 
           <button
             onClick={() => actions.deleteTask(task)}
-            className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg transition-colors"
+            className="text-slate-400 hover:text-rose-400 p-1.5 rounded-lg transition-colors"
             title="タスクを削除"
             aria-label={`タスク「${task.title}」を削除`}
           >
@@ -234,7 +234,7 @@ export default function TaskCard({
             </button>
             <button
               onClick={() => actions.dismissUndo(task.id)}
-              className="text-slate-500 hover:text-slate-300"
+              className="text-slate-400 hover:text-slate-300"
               title="閉じる"
               aria-label="閉じる"
             >
@@ -305,7 +305,7 @@ export default function TaskCard({
               </span>
               <button
                 onClick={actions.dismissAdoptTip}
-                className="text-amber-300/70 hover:text-amber-100 shrink-0"
+                className="text-amber-300 hover:text-amber-100 shrink-0"
                 title="閉じる"
                 aria-label="ヒントを閉じる"
               >
@@ -361,7 +361,7 @@ export default function TaskCard({
               value={newSubtaskTitle}
               onChange={(e) => setNewSubtaskTitle(e.target.value)}
               onKeyDown={(e) => isSubmitEnter(e) && submitSubtask()}
-              className="flex-1 min-w-0 text-xs sm:text-sm bg-[#0d0e14] border border-slate-800 rounded-xl px-3.5 py-2 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 transition-all"
+              className="flex-1 min-w-0 text-xs sm:text-sm bg-[#0d0e14] border border-slate-800 rounded-xl px-3.5 py-2 text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500/50 transition-all"
             />
             <button
               onClick={submitSubtask}
