@@ -19,8 +19,17 @@ describe("buildDecomposePrompt", () => {
     }
   });
 
+  it("機器の前提・準備だけの手順・作業のまとめすぎを禁じ、具体例（流用されやすい）は入れない", () => {
+    expect(ACTION_RULES).toContain("スマートフォン・パソコン・インターネット");
+    expect(ACTION_RULES).toContain("準備だけの手順");
+    expect(ACTION_RULES).toContain("多くの作業を1つのアクションにまとめない");
+    expect(ACTION_RULES).toContain("やっても前に進まないほど小さい行動にはしない");
+    expect(ACTION_RULES).toContain("ネットで調べる・検索する");
+    expect(ACTION_RULES).not.toContain("英単語アプリ");
+  });
+
   it("ユーザー自身が指定した道具は使ってよいと伝える", () => {
-    expect(ACTION_RULES).toContain("ユーザーがタスク名や手順で自分から指定している道具・サービスは使ってよい");
+    expect(ACTION_RULES).toContain("ユーザーがタスク名や手順で自分から指定している道具・サービス");
   });
 
   it("一から分解するときは個数と課題名を伝える", () => {

@@ -28,6 +28,7 @@ npm run start     # ビルド成果物を起動
 npm run lint      # ESLint 実行
 npm test          # Vitest（app/**/*.test.{ts,tsx}）を1回実行
 npm run test:watch # Vitest をウォッチモードで実行
+npm run eval:prompt # プロンプト比較（例あり/なし × 確認用タスク10件を Gemini で生成。要 GEMINI_API_KEY 環境変数。結果は eval-results/）
 ```
 
 変更後は `npm test`・`npm run lint`・`npm run build` で確認する（GitHub Actions の `.github/workflows/ci.yml` でも push・PR ごとに実行される）。テストは純粋なロジック（`app/lib/*.test.ts`）・API Route（`app/api/decompose/route.test.ts`、Gemini への fetch を差し替え）は node 環境、コンポーネント・フック・画面全体（`*.test.tsx`、先頭の `// @vitest-environment jsdom` で jsdom・React Testing Library）が対象（設定は `vitest.config.mts`、`@/*` エイリアスあり）。
@@ -60,7 +61,9 @@ app/
   lib/csp.ts              # CSP の組み立てと nonce の生成（テストあり）
   lib/requestGuard.ts     # API Route の同一オリジン確認と簡易レート制限（テストあり）
   lib/decomposePrompt.ts  # Gemini に送るプロンプトの組み立て（行動の条件・安全性の判断。テストあり）
+  lib/promptEval.ts       # プロンプト比較用の確認タスクと、具体的すぎ/曖昧な手順の簡易判定（テストあり）
   lib/decomposeRequest.ts # /api/decompose の入力検証と Gemini 応答の解釈（テストあり）
+scripts/evalPrompt.ts     # プロンプト比較スクリプト（tsx で実行。本番と同じ buildGeminiRequestBody を使う）
 proxy.ts                  # ページのリクエストごとに nonce を作り CSP ヘッダーを付ける（Next 16 の Proxy。旧 middleware）
 ```
 
@@ -117,6 +120,10 @@ proxy.ts                  # ページのリクエストごとに nonce を作り
   - `focusSubtask` あり → その手順を細分化 / `existingSubtasks` あり → 完了済みの続きから、ユーザーの手順と重複しない「次に取り組む N 個」を提案（個数が少なくても1つを大きくしない） / どちらも無し → 一から分解
   - プロンプトは `lib/decomposePrompt.ts` の `buildDecomposePrompt`（テストあり）。いずれも「10分以内で終わる最低限の一歩・動詞で終わる具体的な行動」を条件にする
   - **誰にでも当てはまる一般的な行動にする**（コンセプトは「スタートアップブースター」）。特定のアプリ・サービス・製品名や、特定の道具・お金・場所・人がある前提の手順は出させない（×「英単語アプリを開く」→ ○「覚えたい英単語を3つ選ぶ」）。ユーザーがタスク名や手順で自分から指定した道具は使ってよい
+  - スマホ・パソコン・ネット（ネットで調べる・検索・サイトやメモアプリ）も前提にしない。例外はユーザーが自分で指定した場合と、機器がないと成り立たないタスク（プログラミングなど）だけ
+  - 「メモを用意する」のような、どのタスクにも当てはまる準備だけの手順は出さない。「1回だけ」「1秒だけ」のような小さすぎる行動や、「すべて」「全部」をまとめた大きすぎる行動も避ける
+  - **× / ○ の具体例は入れない**（比較したところ、例の文言の流用と不自然に細かい手順が増えた）
+  - ルールを変えたら、変える前の `ACTION_RULES` を `lib/promptEval.ts` の `PREVIOUS_ACTION_RULES` に移し、`npm run eval:prompt` で比べる（引数でタスクを絞れる: `npm run eval:prompt -- 絵`）
 - 倫理に反するタスクは拒否する: `responseSchema` の `refusal`（`none` / `unethical` / `self_harm`）を AI に判定させ、拒否なら 422 + `TASK_REFUSED` / `TASK_REFUSED_SELF_HARM` を返す。Gemini の安全フィルタ（`GEMINI_BLOCK_REASONS`）でブロックされた場合も、次のモデルを試さず `TASK_REFUSED`
   - 正当な目的が考えられるもの（防犯・学習・創作など）まで断らないよう、プロンプトでは「明らかな場合のみ」拒否させている
   - 自傷・自殺に関わる場合は、カード内のエラーで相談窓口（よりそいホットライン）を案内する

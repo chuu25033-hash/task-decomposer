@@ -4,15 +4,22 @@ import type { DecomposeRequest } from "@/app/lib/decomposeRequest";
 // 各アクションに共通する条件
 // アプリのコンセプトは「スタートアップブースター」なので、誰でもすぐ始められる最低限の一歩にする。
 // 利用者ごとに環境（使っているアプリ・道具・お金・場所・人間関係など）は違うため、特定のものを前提にしない
+//
+// ※ 具体例（× / ○ の対比）は入れない。npm run eval:prompt で比べたところ、例の文言がそのまま
+//   流用されたり、例につられて不自然なほど細かい手順が増えたりしたため（2026-11 時点）
+// ※ ネットで調べる・スマホやパソコンを使う手順も、全員ができるとは限らないため出さない（ユーザーが指定した場合を除く）
 export const ACTION_RULES = `条件:
-- 各アクションは「今すぐ10分以内で終わる」最低限の大きさにする。迷ったら、より小さく・ハードルの低い方を選ぶ
+- 各アクションは「今すぐ10分以内で終わる」最低限の大きさにする。迷ったら、ハードルの低い方を選ぶ
+- ただし「1回だけ」「1秒だけ」のような、やっても前に進まないほど小さい行動にはしない（目安: 1つあたり数分）
+- 「すべて」「全て」「全部」のように多くの作業を1つのアクションにまとめない
 - 誰が読んでもそのまま実行できる、一般的な行動にする
   - 特定のアプリ・サービス・製品・ブランド・サイト名を出さない
   - 特定の道具・持ち物・お金・場所・人（先生・同僚・友人など）がある前提にしない
-  - 必要な物は「教材」「資料」「メモできるもの」「必要な道具」など、誰にでも当てはまる呼び方にする
-  - ただし、ユーザーがタスク名や手順で自分から指定している道具・サービスは使ってよい
-  - 例: ×「英単語アプリを開く」→ ○「覚えたい英単語を3つ選ぶ」、×「Googleドキュメントを開く」→ ○「タイトルを1行書く」
-- 動詞で終わる具体的な行動にする（例:「必要な物を目の前に出す」「最初の1行を書く」）
+  - スマートフォン・パソコン・インターネットを使う前提にしない（ネットで調べる・検索する・サイトやメモアプリを使う、なども含む）。調べ物が必要なら「手元の教材や資料を読む」などにする
+  - 必要な物は、特定の製品ではなく「教材」「資料」のような一般的な呼び方にする
+  - 例外: ユーザーがタスク名や手順で自分から指定している道具・サービス（「ネットで確定申告する」「パソコンでプログラミングを学ぶ」など）や、機器がないと成り立たないタスクは、それを使ってよい
+- どのタスクにも当てはまる準備だけの手順（「メモを用意する」「道具を手元に出す」など）は入れず、そのタスクならではの最初の一歩にする
+- 動詞で終わる具体的な行動にする（例:「最初の1行を書く」「問題を1問だけ解く」）
 - 考えるだけ・曖昧な表現（「検討する」「頑張る」など）は避ける
 - 実行する順番に並べる`;
 
@@ -32,14 +39,39 @@ export const SAFETY_RULES = `安全性の判断（refusal の決め方）:
 const OUTPUT_FORMAT = `以下のJSON形式のみで出力してください。
 {"refusal":"none","subtasks":["アクション1","アクション2"]}`;
 
-export const buildDecomposePrompt = ({
-  taskTitle,
-  count,
-  existingSubtasks,
-  omittedCompletedCount,
-  rejectedSubtasks,
-  focusSubtask,
-}: DecomposeRequest): string => {
+// Gemini の generateContent に送る本文（API Route と比較用スクリプトで同じ設定を使う）
+export const buildGeminiRequestBody = (prompt: string) => ({
+  contents: [{ parts: [{ text: prompt }] }],
+  generationConfig: {
+    responseMimeType: "application/json",
+    // 出力形式をスキーマで固定し、JSON の崩れを防ぐ
+    responseSchema: {
+      type: "OBJECT",
+      properties: {
+        refusal: { type: "STRING", enum: ["none", "unethical", "self_harm"] },
+        subtasks: { type: "ARRAY", items: { type: "STRING" } },
+      },
+      required: ["refusal", "subtasks"],
+      propertyOrdering: ["refusal", "subtasks"],
+    },
+    // 思考を最小限にして応答を速くする
+    // （Gemini 3 系は temperature を下げると出力がループしやすいため既定値のままにする）
+    thinkingConfig: { thinkingLevel: "low" },
+  },
+});
+
+// rules は比較用に差し替えられるようにしている（通常は ACTION_RULES）
+export const buildDecomposePrompt = (
+  {
+    taskTitle,
+    count,
+    existingSubtasks,
+    omittedCompletedCount,
+    rejectedSubtasks,
+    focusSubtask,
+  }: DecomposeRequest,
+  rules: string = ACTION_RULES
+): string => {
   // 手順が多いときは古い完了済みを省いているため、その件数だけ伝える（lib/decomposeRequest.ts）
   const existingList = [
     ...(omittedCompletedCount > 0
@@ -78,7 +110,7 @@ ${existingList}
 
   return `${instruction}
 
-${ACTION_RULES}
+${rules}
 
 ${SAFETY_RULES}
 

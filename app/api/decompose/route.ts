@@ -7,7 +7,7 @@ import {
   GEMINI_MODELS,
   isApiKeyError,
 } from "@/app/lib/gemini";
-import { buildDecomposePrompt } from "@/app/lib/decomposePrompt";
+import { buildDecomposePrompt, buildGeminiRequestBody } from "@/app/lib/decomposePrompt";
 import { parseDecomposeRequest, parseGeminiOutput } from "@/app/lib/decomposeRequest";
 import { clientKey, createRateLimiter, isSameOriginRequest } from "@/app/lib/requestGuard";
 
@@ -89,29 +89,7 @@ export async function POST(req: Request) {
             // URL に含めるとログに残りやすいため、キーはヘッダーで渡す
             "x-goog-api-key": apiKey,
           },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [{ text: prompt }],
-              },
-            ],
-            generationConfig: {
-              responseMimeType: "application/json",
-              // 出力形式をスキーマで固定し、JSON の崩れを防ぐ
-              responseSchema: {
-                type: "OBJECT",
-                properties: {
-                  refusal: { type: "STRING", enum: ["none", "unethical", "self_harm"] },
-                  subtasks: { type: "ARRAY", items: { type: "STRING" } },
-                },
-                required: ["refusal", "subtasks"],
-                propertyOrdering: ["refusal", "subtasks"],
-              },
-              // 思考を最小限にして応答を速くする
-              // （Gemini 3 系は temperature を下げると出力がループしやすいため既定値のままにする）
-              thinkingConfig: { thinkingLevel: "low" },
-            },
-          }),
+          body: JSON.stringify(buildGeminiRequestBody(prompt)),
           signal: controller.signal,
         });
 

@@ -42,3 +42,6 @@ next-env.d.ts
 
 # OneDrive / Windows のフォルダ設定ファイル
 desktop.ini
+
+# プロンプト比較スクリプトの結果（npm run eval:prompt）
+/eval-results/
