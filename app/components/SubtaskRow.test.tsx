@@ -12,6 +12,7 @@ const setup = (props: Partial<Parameters<typeof SubtaskRow>[0]> = {}) => {
   const handlers = {
     onToggle: vi.fn(),
     onToggleKeep: vi.fn(),
+    onCyclePriority: vi.fn(),
     onBreakDown: vi.fn(),
     onMove: vi.fn(),
     onRename: vi.fn(),
@@ -20,6 +21,7 @@ const setup = (props: Partial<Parameters<typeof SubtaskRow>[0]> = {}) => {
   render(
     <SubtaskRow
       subtask={subtask}
+      stepNumber={1}
       isFirst
       isLast={false}
       isNext
@@ -80,6 +82,18 @@ describe("SubtaskRow", () => {
     fireEvent.click(screen.getByText("AI"));
     expect(onBreakDown).not.toHaveBeenCalled();
     expect(onToggleKeep).not.toHaveBeenCalled();
+  });
+
+  it("手順の番号を表示し、優先度があればバッジのタップで切り替える", () => {
+    const { onCyclePriority } = setup({ subtask: { ...subtask, priority: "high" }, stepNumber: 3 });
+    expect(screen.getByText("3.")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("優先度 高（タップで変更）"));
+    expect(onCyclePriority).toHaveBeenCalled();
+  });
+
+  it("優先度が無い手順にはバッジを出さない", () => {
+    setup();
+    expect(screen.queryByLabelText(/優先度/)).toBeNull();
   });
 
   it("チェックボックスに手順名つきのラベルがある", () => {

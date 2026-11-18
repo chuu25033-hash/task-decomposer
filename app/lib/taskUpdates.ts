@@ -1,7 +1,12 @@
 // タスク一覧を更新する純粋関数（page.tsx からは setTasks((prev) => ...) で呼ぶ）
 // 常に最新の状態（prev）に対して適用することで、AI処理の結果などとの上書き合いを防ぐ
 import { moveSubtaskInList } from "@/app/lib/subtaskLogic";
-import { MAX_TITLE_LENGTH, type Subtask, type Task } from "@/app/types/task";
+import {
+  MAX_TITLE_LENGTH,
+  type Subtask,
+  type SubtaskPriority,
+  type Task,
+} from "@/app/types/task";
 
 // 前後の空白を除き、上限で切り詰める（空なら null）
 export const normalizeTitle = (value: string): string | null => {
@@ -105,6 +110,20 @@ export const toggleSubtaskCompleted = (tasks: Task[], taskId: string, subtaskId:
 // AI提案の「採用」を切り替える（採用したものは AI再提案 で作り直さない）
 export const toggleSubtaskKept = (tasks: Task[], taskId: string, subtaskId: string): Task[] =>
   updateSubtask(tasks, taskId, subtaskId, (s) => ({ ...s, kept: !s.kept }));
+
+// 優先度をタップで切り替える順番（高 → 中 → 低 → 高。未設定のものは高から）
+const NEXT_PRIORITY: Record<SubtaskPriority, SubtaskPriority> = {
+  high: "medium",
+  medium: "low",
+  low: "high",
+};
+
+export const nextPriority = (current: SubtaskPriority | undefined): SubtaskPriority =>
+  current ? NEXT_PRIORITY[current] : "high";
+
+// 手順の優先度を次の段階に切り替える（AI の判断をユーザーが直せるようにする）
+export const cycleSubtaskPriority = (tasks: Task[], taskId: string, subtaskId: string): Task[] =>
+  updateSubtask(tasks, taskId, subtaskId, (s) => ({ ...s, priority: nextPriority(s.priority) }));
 
 // 内容を変えた AI 提案はユーザーの手順として扱い、AI再提案で消さない
 export const renameSubtask = (

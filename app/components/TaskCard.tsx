@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import SubtaskRow from "@/app/components/SubtaskRow";
 import { TrashIcon } from "@/app/components/icons";
 import { isSubmitEnter, useInlineEdit } from "@/app/hooks/useInlineEdit";
 import { getAiPlan, type AiMode } from "@/app/lib/subtaskLogic";
-import { MAX_TITLE_LENGTH, type Subtask, type Task } from "@/app/types/task";
+import { PRIORITY_LABELS } from "@/app/lib/taskText";
+import { MAX_TITLE_LENGTH, SUBTASK_PRIORITIES, type Subtask, type Task } from "@/app/types/task";
 
 // AIボタンの動作の切り替え（getAiPlan）は lib/subtaskLogic.ts を参照
 const AI_MODE_LABELS: Record<AiMode, string> = {
@@ -39,6 +40,7 @@ export interface TaskCardActions {
   addSubtask: (taskId: string, title: string) => void;
   toggleSubtask: (taskId: string, subtaskId: string) => void;
   toggleKeep: (taskId: string, subtaskId: string) => void;
+  cyclePriority: (taskId: string, subtaskId: string) => void;
   moveSubtask: (taskId: string, subtaskId: string, direction: -1 | 1) => void;
   renameSubtask: (taskId: string, subtaskId: string, title: string) => void;
   deleteSubtask: (taskId: string, subtaskId: string) => void;
@@ -48,6 +50,10 @@ export interface TaskCardActions {
   toggleExpanded: (taskId: string) => void;
   dismissAdoptTip: () => void;
   openHelp: () => void;
+  // 手順をテキスト（チェックリスト）でクリップボードにコピーする。成功したら true
+  copyAsText: (task: Task) => Promise<boolean>;
+  // このタスクの分け方をお手本にする（お手本ならやめる）
+  toggleReference: (task: Task) => void;
 }
 
 interface Props {
@@ -60,6 +66,8 @@ interface Props {
   showAdoptTip: boolean;
   isRecentlyAdded: boolean;
   isExpanded: boolean;
+  // このタスクの分け方がお手本になっているか
+  isReference: boolean;
   actions: TaskCardActions;
 }
 
@@ -72,10 +80,18 @@ export default function TaskCard({
   showAdoptTip,
   isRecentlyAdded,
   isExpanded,
+  isReference,
   actions,
 }: Props) {
   const titleEdit = useInlineEdit((title) => actions.renameTask(task.id, title));
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
+  // コピーの結果（少しの間だけ表示する）
+  const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(null);
+  useEffect(() => {
+    if (!copyStatus) return;
+    const id = setTimeout(() => setCopyStatus(null), 2000);
+    return () => clearTimeout(id);
+  }, [copyStatus]);
 
   const completedCount = task.subtasks.filter((s) => s.completed).length;
   const totalCount = task.subtasks.length;
@@ -90,6 +106,16 @@ export default function TaskCard({
   const nextSubtaskId = task.subtasks.find((s) => !s.completed)?.id;
   // すべて完了したタスクは折りたたんで一覧をすっきりさせる（AI処理中は除く）
   const isCollapsed = isAllCompleted && !isDecomposing && !isExpanded;
+
+  // 優先度ごとの件数（未完了のもの。どれが重要かを一目で分かるようにする）
+  const priorityCounts = SUBTASK_PRIORITIES.map((p) => ({
+    priority: p,
+    count: task.subtasks.filter((s) => !s.completed && s.priority === p).length,
+  })).filter((c) => c.count > 0);
+
+  const copyAsText = async () => {
+    setCopyStatus((await actions.copyAsText(task)) ? "copied" : "failed");
+  };
 
   const submitSubtask = () => {
     if (!newSubtaskTitle.trim()) return;
@@ -320,6 +346,7 @@ export default function TaskCard({
               <SubtaskRow
                 key={subtask.id}
                 subtask={subtask}
+                stepNumber={index + 1}
                 isFirst={index === 0}
                 isLast={index === task.subtasks.length - 1}
                 isNext={subtask.id === nextSubtaskId}
@@ -328,6 +355,7 @@ export default function TaskCard({
                 isTaskBusy={isDecomposing}
                 onToggle={() => actions.toggleSubtask(task.id, subtask.id)}
                 onToggleKeep={() => actions.toggleKeep(task.id, subtask.id)}
+                onCyclePriority={() => actions.cyclePriority(task.id, subtask.id)}
                 onBreakDown={() => actions.breakDown(task, subtask)}
                 onMove={(direction) => actions.moveSubtask(task.id, subtask.id, direction)}
                 onRename={(title) => actions.renameSubtask(task.id, subtask.id, title)}
@@ -350,6 +378,52 @@ export default function TaskCard({
                 </div>
               ))}
           </div>
+
+          {/* 優先度のまとめ・テキストでコピー・お手本（手順があるときだけ） */}
+          {totalCount > 0 && !isDecomposing && (
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3 text-[11px]">
+              <p className="text-slate-400">
+                番号の順に進めます
+                {priorityCounts.length > 0 && (
+                  <>
+                    {" "}
+                    ／ 残り{" "}
+                    {priorityCounts.map((c, i) => (
+                      <span key={c.priority}>
+                        {i > 0 && "・"}優先:{PRIORITY_LABELS[c.priority]}{" "}
+                        <b className="text-slate-200 font-mono">{c.count}</b>
+                      </span>
+                    ))}
+                  </>
+                )}
+              </p>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={copyAsText}
+                  className="px-2.5 py-1 rounded-lg border border-slate-700 text-slate-300 hover:border-cyan-500/60 hover:text-cyan-200 transition-all active:scale-95"
+                  title="手順をチェックリスト形式のテキストでコピーします（メモ・ToDo アプリなどに貼り付けられます）"
+                >
+                  {copyStatus === "copied" ? "コピーしました" : copyStatus === "failed" ? "コピーできません" : "📋 テキストでコピー"}
+                </button>
+                <button
+                  onClick={() => actions.toggleReference(task)}
+                  aria-pressed={isReference}
+                  className={`px-2.5 py-1 rounded-lg border transition-all active:scale-95 ${
+                    isReference
+                      ? "border-amber-400/70 bg-amber-400/15 text-amber-200 font-bold"
+                      : "border-slate-700 text-slate-300 hover:border-amber-400/60 hover:text-amber-200"
+                  }`}
+                  title={
+                    isReference
+                      ? "この分け方をお手本にしています（タップでやめる）"
+                      : "この分け方をお手本にすると、次に新しいタスクを分解するとき、手順の細かさや書き方をこれに揃えます"
+                  }
+                >
+                  {isReference ? "★ お手本に設定中" : "☆ お手本にする"}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* 手動サブタスク追加フォーム */}
           <div className="flex gap-2 pt-3 border-t border-slate-800">

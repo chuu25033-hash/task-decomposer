@@ -33,6 +33,9 @@ const makeActions = (): TaskCardActions => ({
   toggleExpanded: vi.fn(),
   dismissAdoptTip: vi.fn(),
   openHelp: vi.fn(),
+  cyclePriority: vi.fn(),
+  copyAsText: vi.fn().mockResolvedValue(true),
+  toggleReference: vi.fn(),
 });
 
 const renderCard = (props: Partial<Parameters<typeof TaskCard>[0]> = {}) => {
@@ -47,6 +50,7 @@ const renderCard = (props: Partial<Parameters<typeof TaskCard>[0]> = {}) => {
       showAdoptTip={false}
       isRecentlyAdded={false}
       isExpanded={false}
+      isReference={false}
       actions={actions}
       {...props}
     />
@@ -93,6 +97,39 @@ describe("TaskCard", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(actions.addSubtask).toHaveBeenCalledWith("t1", "参考文献を探す");
     expect(input.value).toBe("");
+  });
+
+  it("未完了の手順の優先度を件数でまとめて表示する", () => {
+    renderCard({
+      task: {
+        ...task,
+        subtasks: [
+          { id: "a", title: "A", completed: false, source: "ai", priority: "high" },
+          { id: "b", title: "B", completed: false, source: "ai", priority: "high" },
+          { id: "c", title: "C", completed: true, source: "ai", priority: "low" },
+          { id: "d", title: "D", completed: false, source: "ai", priority: "medium" },
+        ],
+      },
+    });
+    const summary = screen.getByText(/番号の順に進めます/);
+    expect(summary.textContent).toContain("優先:高 2");
+    expect(summary.textContent).toContain("優先:中 1");
+    // 完了済みは数えない
+    expect(summary.textContent).not.toContain("優先:低");
+  });
+
+  it("テキストでコピー・お手本の切り替えを呼び出す", async () => {
+    const actions = renderCard();
+    fireEvent.click(screen.getByRole("button", { name: /テキストでコピー/ }));
+    expect(actions.copyAsText).toHaveBeenCalledWith(task);
+    expect(await screen.findByText("コピーしました")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /お手本にする/ }));
+    expect(actions.toggleReference).toHaveBeenCalledWith(task);
+  });
+
+  it("お手本に設定中のタスクはそれと分かる表示にする", () => {
+    renderCard({ isReference: true });
+    expect(screen.getByRole("button", { name: /お手本に設定中/ }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("すべて完了したタスクは折りたたむ", () => {

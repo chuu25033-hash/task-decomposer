@@ -10,6 +10,14 @@ import { isSubmitEnter } from "@/app/hooks/useInlineEdit";
 import { useStoredTasks } from "@/app/hooks/useStoredTasks";
 import { clearApiKey, loadApiKey, type StoredApiKey } from "@/app/lib/apiKeyStorage";
 import { API_KEY_HEADER, ERROR_CODES } from "@/app/lib/gemini";
+import { getTaskInputHint, TASK_INPUT_EXAMPLES } from "@/app/lib/inputHint";
+import {
+  clearReference,
+  createReference,
+  loadReference,
+  saveReference,
+  type StoredReference,
+} from "@/app/lib/referenceExample";
 import { readStorage, writeStorage } from "@/app/lib/safeStorage";
 import {
   getAiPlan,
@@ -18,11 +26,13 @@ import {
   restoreReplacedSubtasks,
 } from "@/app/lib/subtaskLogic";
 import { mergeImportedTasks } from "@/app/lib/taskBackup";
+import { formatTaskAsText } from "@/app/lib/taskText";
 import {
   addSubtask,
   addTask,
   captureDeletedSubtask,
   captureDeletedTask,
+  cycleSubtaskPriority,
   moveSubtask,
   normalizeTitle,
   removeSubtask,
@@ -36,7 +46,14 @@ import {
   updateSubtasks,
   type DeletedItem,
 } from "@/app/lib/taskUpdates";
-import { isReplaceableByAi, MAX_TITLE_LENGTH, type Subtask, type Task } from "@/app/types/task";
+import {
+  isReplaceableByAi,
+  isSubtaskPriority,
+  MAX_TITLE_LENGTH,
+  type GeneratedStep,
+  type Subtask,
+  type Task,
+} from "@/app/types/task";
 
 // AI呼び出しの失敗（code で APIキー起因かどうかを判別する）
 class AiRequestError extends Error {
@@ -70,6 +87,15 @@ const AI_ERROR_MESSAGES: Record<string, string> = {
     "このタスクは分解できません。つらい気持ちを抱えているなら、ひとりで抱え込まずに相談してください。よりそいホットライン 0120-279-338（24時間・無料）",
 };
 
+// API の応答の手順を解釈する（{ title, priority } の形。念のため文字列だけの形も受け付ける）
+const toGeneratedStep = (raw: unknown): GeneratedStep | null => {
+  if (typeof raw === "string") return raw.trim() ? { title: raw } : null;
+  if (typeof raw !== "object" || raw === null) return null;
+  const { title, priority } = raw as { title?: unknown; priority?: unknown };
+  if (typeof title !== "string" || !title.trim()) return null;
+  return isSubtaskPriority(priority) ? { title, priority } : { title };
+};
+
 // 状態のうち、タスクごとに持つもの（タスクを消したら一緒に消す）
 const withoutKey = <T,>(record: Record<string, T>, key: string): Record<string, T> => {
   if (!(key in record)) return record;
@@ -100,6 +126,8 @@ export default function Home() {
   const recentlyAddedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 削除の履歴（「元に戻す」用。新しいものが末尾。保存不要）
   const [deletedItems, setDeletedItems] = useState<DeletedItem[]>([]);
+  // お手本（気に入った分け方。次に一から分解するときに AI に渡す）
+  const [reference, setReference] = useState<StoredReference | null>(null);
 
   // APIキーとヒントの表示状態をマウント後に読み込む（ハイドレーション不一致を避ける）
   useEffect(() => {
@@ -107,6 +135,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setApiKey(loadApiKey());
     setIsAdoptTipDismissed(readStorage(ADOPT_TIP_KEY) === "1");
+    setReference(loadReference());
   }, []);
 
   useEffect(
@@ -194,6 +223,7 @@ export default function Home() {
       existingSubtasks?: { title: string; completed: boolean }[];
       rejectedSubtasks?: string[];
       focusSubtask?: string;
+      referenceExample?: { taskTitle: string; subtasks: string[] };
     },
     key: string
   ): Promise<Subtask[]> => {
@@ -217,15 +247,19 @@ export default function Home() {
       clearTimeout(timeoutId);
     }
 
-    if (!res.ok || !Array.isArray(data.subtasks) || data.subtasks.length === 0) {
+    const steps = Array.isArray(data.subtasks)
+      ? data.subtasks.map(toGeneratedStep).filter((s): s is GeneratedStep => s !== null)
+      : [];
+    if (!res.ok || steps.length === 0) {
       throw new AiRequestError(data.error ?? `HTTP ${res.status}`, data.code);
     }
 
-    return (data.subtasks as string[]).map((subTitle) => ({
+    return steps.map(({ title, priority }) => ({
       id: crypto.randomUUID(),
-      title: subTitle,
+      title,
       completed: false,
       source: "ai",
+      ...(priority ? { priority } : {}),
     }));
   };
 
@@ -237,7 +271,12 @@ export default function Home() {
       openKeyModal();
       return;
     }
-    const { count, targetIds } = getAiPlan(task, decomposeCounts[task.id] ?? DEFAULT_COUNT);
+    const { mode, count, targetIds } = getAiPlan(task, decomposeCounts[task.id] ?? DEFAULT_COUNT);
+    // お手本は一から分解するときだけ使う（再提案・追加は今の手順に合わせるため）。自分自身はお手本にしない
+    const referenceExample =
+      mode === "decompose" && reference && reference.taskId !== task.id
+        ? { taskTitle: reference.taskTitle, subtasks: reference.subtasks }
+        : undefined;
     const targets = new Set(targetIds);
     // 作り直し対象（元に戻す用に控えておく）
     const removed = task.subtasks.filter((s) => targets.has(s.id));
@@ -257,6 +296,7 @@ export default function Home() {
             .map((s) => ({ title: s.title, completed: s.completed })),
           // 作り直す（採用されなかった）案は、同じ案が返らないよう「避けるべき案」として渡す
           rejectedSubtasks: removed.map((s) => s.title),
+          referenceExample,
         },
         apiKey.key
       );
@@ -333,6 +373,36 @@ export default function Home() {
     setTasks((prev) => mergeImportedTasks(prev, imported, options).tasks);
   };
 
+  // お手本の設定・解除（1件だけ。設定した時点の手順を写して保存する）
+  const toggleReference = (task: Task) => {
+    if (reference?.taskId === task.id) {
+      clearReference();
+      setReference(null);
+      return;
+    }
+    const next = createReference(task);
+    if (!next) return;
+    saveReference(next);
+    setReference(next);
+  };
+
+  const removeReference = () => {
+    clearReference();
+    setReference(null);
+  };
+
+  // 手順をチェックリスト形式のテキストにしてコピーする（他のアプリに貼り付けて使う）
+  const copyTaskAsText = async (task: Task) => {
+    try {
+      await navigator.clipboard.writeText(formatTaskAsText(task));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const inputHint = getTaskInputHint(newTaskTitle);
+
   // カードに渡す操作（状態の更新はすべて最新の状態 prev に対して行う）
   const actions: TaskCardActions = {
     decompose: decomposeTask,
@@ -353,6 +423,10 @@ export default function Home() {
       dismissAdoptTip();
       setTasks((prev) => toggleSubtaskKept(prev, taskId, subtaskId));
     },
+    cyclePriority: (taskId, subtaskId) =>
+      setTasks((prev) => cycleSubtaskPriority(prev, taskId, subtaskId)),
+    copyAsText: copyTaskAsText,
+    toggleReference,
     moveSubtask: (taskId, subtaskId, direction) =>
       setTasks((prev) => moveSubtask(prev, taskId, subtaskId, direction)),
     renameSubtask: (taskId, subtaskId, title) =>
@@ -520,7 +594,7 @@ export default function Home() {
         )}
 
         {/* タスク入力エリア */}
-        <section className="bg-[#181b26] rounded-2xl p-2 shadow-2xl border border-cyan-500/30 mb-10 flex gap-2 items-center focus-within:border-cyan-400 focus-within:ring-2 focus-within:ring-cyan-500/20 transition-all cyber-glow">
+        <section className="bg-[#181b26] rounded-2xl p-2 shadow-2xl border border-cyan-500/30 mb-3 flex gap-2 items-center focus-within:border-cyan-400 focus-within:ring-2 focus-within:ring-cyan-500/20 transition-all cyber-glow">
           <input
             type="text"
             value={newTaskTitle}
@@ -538,6 +612,48 @@ export default function Home() {
             追加
           </button>
         </section>
+
+        {/* 入力の案内（入力の書き方で提案がぶれるため、コツと例を示す） */}
+        <div className="mb-10 space-y-2 px-1">
+          {inputHint ? (
+            <p role="status" className="text-xs text-amber-200 leading-relaxed">
+              💡 {inputHint}
+            </p>
+          ) : (
+            <p className="text-xs text-slate-400 leading-relaxed">
+              💡 「<b className="text-slate-200">何を</b>」「<b className="text-slate-200">どこまで</b>」（必要なら期限も）を書くと、提案が安定します
+            </p>
+          )}
+          {!newTaskTitle.trim() && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-slate-400">例:</span>
+              {TASK_INPUT_EXAMPLES.map((example) => (
+                <button
+                  key={example}
+                  onClick={() => setNewTaskTitle(example)}
+                  className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-300 hover:border-cyan-500/60 hover:text-cyan-200 transition-all active:scale-95"
+                  title="入力欄に入れる"
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* お手本の設定中（次の AI分解 で分け方を揃える） */}
+          {reference && (
+            <div className="flex items-center justify-between gap-2 text-xs text-amber-100 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2">
+              <span className="min-w-0 leading-relaxed">
+                ★ お手本: 「<b className="text-amber-300 break-all">{reference.taskTitle}</b>」の分け方に揃えて分解します
+              </span>
+              <button
+                onClick={removeReference}
+                className="text-amber-300 hover:text-amber-100 shrink-0 underline underline-offset-2"
+              >
+                やめる
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* APIキー未登録の案内 */}
         {isLoaded && !apiKey && (
@@ -585,6 +701,7 @@ export default function Home() {
                 showAdoptTip={task.id === adoptTipTaskId}
                 isRecentlyAdded={task.id === recentlyAddedId}
                 isExpanded={expandedTaskIds.includes(task.id)}
+                isReference={reference?.taskId === task.id}
                 actions={actions}
               />
             ))

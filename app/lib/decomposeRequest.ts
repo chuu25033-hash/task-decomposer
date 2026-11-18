@@ -1,5 +1,9 @@
 // POST /api/decompose のリクエスト本文の検証・整形（Route から切り出し、単体テストで確認できるようにする）
-import { MAX_TITLE_LENGTH } from "@/app/types/task";
+import {
+  isSubtaskPriority,
+  MAX_TITLE_LENGTH,
+  type GeneratedStep,
+} from "@/app/types/task";
 
 // AI に渡す既存サブタスクの最大件数（多すぎると応答が遅く・不安定になる）
 export const MAX_EXISTING_SUBTASKS = 50;
@@ -8,6 +12,14 @@ export const MAX_RECEIVED_SUBTASKS = 200;
 export const DEFAULT_COUNT = 5;
 export const MIN_COUNT = 1;
 export const MAX_COUNT = 10;
+// お手本（ユーザーが気に入った過去の分解例）として受け取る手順の最大件数
+export const MAX_REFERENCE_STEPS = 10;
+
+// 「さっきのように」分解するためのお手本（過去のタスク名と、その手順）
+export interface ReferenceExample {
+  taskTitle: string;
+  subtasks: string[];
+}
 
 export interface DecomposeRequest {
   taskTitle: string;
@@ -17,6 +29,8 @@ export interface DecomposeRequest {
   omittedCompletedCount: number;
   rejectedSubtasks: string[];
   focusSubtask?: string;
+  // お手本（一から分解するときだけ使う）
+  referenceExample?: ReferenceExample;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -64,6 +78,8 @@ export const parseDecomposeRequest = (body: unknown): DecomposeRequest | null =>
       ? body.focusSubtask.slice(0, MAX_TITLE_LENGTH)
       : undefined;
 
+  const referenceExample = parseReferenceExample(body.referenceExample);
+
   return {
     taskTitle: rawTitle.slice(0, MAX_TITLE_LENGTH),
     count,
@@ -71,7 +87,22 @@ export const parseDecomposeRequest = (body: unknown): DecomposeRequest | null =>
     omittedCompletedCount,
     rejectedSubtasks,
     focusSubtask,
+    ...(referenceExample ? { referenceExample } : {}),
   };
+};
+
+// お手本の検証（タスク名と手順が1つ以上そろっていなければ使わない。件数・文字数は切り詰める）
+// 画面側の LocalStorage からの復元でも使う
+export const parseReferenceExample = (value: unknown): ReferenceExample | undefined => {
+  if (!isRecord(value)) return undefined;
+  const { taskTitle, subtasks } = value;
+  if (typeof taskTitle !== "string" || !taskTitle.trim() || !Array.isArray(subtasks)) return undefined;
+  const steps = subtasks
+    .filter((s): s is string => typeof s === "string" && s.trim() !== "")
+    .slice(0, MAX_REFERENCE_STEPS)
+    .map((s) => s.trim().slice(0, MAX_TITLE_LENGTH));
+  if (steps.length === 0) return undefined;
+  return { taskTitle: taskTitle.trim().slice(0, MAX_TITLE_LENGTH), subtasks: steps };
 };
 
 // AI に渡す既存のサブタスクを MAX_EXISTING_SUBTASKS 件に絞る
@@ -96,9 +127,10 @@ export const selectExistingSubtasks = <T extends { completed: boolean }>(
 };
 
 // Gemini の応答テキストを解釈する（JSON が壊れていても例外にせず、空として扱う）
+// 手順は { title, priority } の形（旧形式の文字列だけの配列も受け付け、その場合は優先度なし）
 export const parseGeminiOutput = (
   rawText: unknown
-): { refusal: "none" | "unethical" | "self_harm"; subtasks: string[] } => {
+): { refusal: "none" | "unethical" | "self_harm"; subtasks: GeneratedStep[] } => {
   if (typeof rawText !== "string") return { refusal: "none", subtasks: [] };
   let parsed: unknown;
   try {
@@ -110,9 +142,15 @@ export const parseGeminiOutput = (
   const refusal =
     parsed.refusal === "unethical" || parsed.refusal === "self_harm" ? parsed.refusal : "none";
   const subtasks = Array.isArray(parsed.subtasks)
-    ? parsed.subtasks
-        .filter((s): s is string => typeof s === "string" && s.trim() !== "")
-        .map((s) => s.trim().slice(0, MAX_TITLE_LENGTH))
+    ? parsed.subtasks.map(toGeneratedStep).filter((s): s is GeneratedStep => s !== null)
     : [];
   return { refusal, subtasks };
+};
+
+const toGeneratedStep = (raw: unknown): GeneratedStep | null => {
+  const rawTitle = typeof raw === "string" ? raw : isRecord(raw) ? raw.title : undefined;
+  if (typeof rawTitle !== "string" || !rawTitle.trim()) return null;
+  const title = rawTitle.trim().slice(0, MAX_TITLE_LENGTH);
+  const priority = isRecord(raw) && isSubtaskPriority(raw.priority) ? raw.priority : undefined;
+  return priority ? { title, priority } : { title };
 };

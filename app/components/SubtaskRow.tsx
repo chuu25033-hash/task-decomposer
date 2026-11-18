@@ -3,10 +3,26 @@
 import { useEffect, useState } from "react";
 import { CheckIcon, EditIcon, TrashIcon } from "@/app/components/icons";
 import { useInlineEdit } from "@/app/hooks/useInlineEdit";
-import { MAX_TITLE_LENGTH, type Subtask } from "@/app/types/task";
+import { PRIORITY_LABELS } from "@/app/lib/taskText";
+import { MAX_TITLE_LENGTH, type Subtask, type SubtaskPriority } from "@/app/types/task";
+
+// 優先度バッジの色（高は目立たせ、低は控えめにする）
+const PRIORITY_STYLES: Record<SubtaskPriority, string> = {
+  high: "border-rose-400/70 bg-rose-500/15 text-rose-200",
+  medium: "border-sky-400/50 text-sky-200",
+  low: "border-slate-600 text-slate-400",
+};
+
+const PRIORITY_DESCRIPTIONS: Record<SubtaskPriority, string> = {
+  high: "優先度 高：目標に欠かせない・他の手順の前提になる手順",
+  medium: "優先度 中：進めるうえで普通に必要な手順",
+  low: "優先度 低：余裕があれば・後回しでもよい手順",
+};
 
 interface Props {
   subtask: Subtask;
+  // 上から何番目か（1始まり。実行する順番を示す）
+  stepNumber: number;
   isFirst: boolean;
   isLast: boolean;
   // 次に取り組むべきサブタスク（最初の未完了）
@@ -19,6 +35,7 @@ interface Props {
   isTaskBusy: boolean;
   onToggle: () => void;
   onToggleKeep: () => void;
+  onCyclePriority: () => void;
   onBreakDown: () => void;
   onMove: (direction: -1 | 1) => void;
   onRename: (title: string) => void;
@@ -28,6 +45,7 @@ interface Props {
 // サブタスク1行（チェック・AIバッジ/採用・⚡細分化・並べ替え・編集・削除）
 export default function SubtaskRow({
   subtask,
+  stepNumber,
   isFirst,
   isLast,
   isNext,
@@ -36,6 +54,7 @@ export default function SubtaskRow({
   isTaskBusy,
   onToggle,
   onToggleKeep,
+  onCyclePriority,
   onBreakDown,
   onMove,
   onRename,
@@ -96,6 +115,10 @@ export default function SubtaskRow({
               subtask.completed ? "line-through text-slate-400 font-normal" : "text-slate-200 font-medium"
             }`}
           >
+            {/* 実行する順番（並べ替えると振り直される） */}
+            <span className="inline-block mr-1.5 min-w-[1.25rem] text-[11px] font-mono font-bold text-slate-400 align-middle">
+              {stepNumber}.
+            </span>
             {isNext && !isBreakingDown && (
               <span className="inline-block mr-2 px-1.5 py-0.5 rounded-md bg-cyan-400 text-black text-[10px] font-black tracking-wider align-middle">
                 次
@@ -126,6 +149,19 @@ export default function SubtaskRow({
                   {subtask.kept ? "📌採用" : "AI"}
                 </button>
               ))}
+            {/* 優先度（タップで 高→中→低 と切り替え。完了済みは目立たせない） */}
+            {subtask.priority && (
+              <button
+                onClick={onCyclePriority}
+                aria-label={`優先度 ${PRIORITY_LABELS[subtask.priority]}（タップで変更）`}
+                title={`${PRIORITY_DESCRIPTIONS[subtask.priority]}（タップで変更）`}
+                className={`inline-block mr-2 px-1 rounded border text-[10px] font-bold align-middle transition-all active:scale-95 ${
+                  subtask.completed ? "border-slate-700 text-slate-400" : PRIORITY_STYLES[subtask.priority]
+                }`}
+              >
+                優先:{PRIORITY_LABELS[subtask.priority]}
+              </button>
+            )}
             {title}
           </span>
         )}

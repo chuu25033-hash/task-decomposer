@@ -1,6 +1,6 @@
 // タスクのバックアップ（JSON ファイルへの書き出し・読み込み）と、保存データの検証
 // LocalStorage はブラウザのデータ削除や端末の変更で消えるため、ファイルで引き継げるようにする
-import { MAX_TITLE_LENGTH, type Subtask, type Task } from "@/app/types/task";
+import { isSubtaskPriority, MAX_TITLE_LENGTH, type Subtask, type Task } from "@/app/types/task";
 
 export const BACKUP_FORMAT = "task-decomposer-backup";
 export const BACKUP_VERSION = 1;
@@ -48,6 +48,8 @@ const sanitizeSubtask = (
     source: raw.source === "ai" ? "ai" : "user",
   };
   if (raw.kept === true) subtask.kept = true;
+  // 不明な値の優先度は付けない（表示しない）
+  if (isSubtaskPriority(raw.priority)) subtask.priority = raw.priority;
   return subtask;
 };
 

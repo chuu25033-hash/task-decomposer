@@ -63,6 +63,10 @@ app/
   lib/decomposePrompt.ts  # Gemini に送るプロンプトの組み立て（行動の条件・安全性の判断。テストあり）
   lib/promptEval.ts       # プロンプト比較用の確認タスクと、具体的すぎ/曖昧な手順の簡易判定（テストあり）
   lib/decomposeRequest.ts # /api/decompose の入力検証と Gemini 応答の解釈（テストあり）
+  lib/inputHint.ts        # タスク入力の案内（入力例・短すぎる/複数タスクの注意）
+  lib/referenceExample.ts # お手本（気に入った分け方）の作成と LocalStorage 保存
+  lib/taskText.ts         # タスクを Markdown チェックリストのテキストにする（他アプリへの貼り付け用）
+  lib/feedbackFeatures.test.ts # 発表会フィードバックで追加した機能（上の3つ・優先度）のテスト
 scripts/evalPrompt.ts     # プロンプト比較スクリプト（tsx で実行。本番と同じ buildGeminiRequestBody を使う）
 proxy.ts                  # ページのリクエストごとに nonce を作り CSP ヘッダーを付ける（Next 16 の Proxy。旧 middleware）
 ```
@@ -73,7 +77,7 @@ proxy.ts                  # ページのリクエストごとに nonce を作り
 - `Home` が状態を持ち、表示は `TaskCard` → `SubtaskRow` に分割。カードへの操作は `TaskCardActions` にまとめて渡す
 - **状態の更新は必ず `setTasks((prev) => 純粋関数(prev, ...))`**（`lib/taskUpdates.ts` / `lib/subtaskLogic.ts`）。AI の結果などと上書きし合わないため、`tasks` を直接参照して更新しない
 - タイトルは保存時に `normalizeTitle` で前後の空白を除き、`MAX_TITLE_LENGTH` で切り詰める
-- データモデル: `Task { id, title, subtasks: Subtask[], isDecomposing? }` / `Subtask { id, title, completed, source? }`（型は `app/types/task.ts`）
+- データモデル: `Task { id, title, subtasks: Subtask[], isDecomposing? }` / `Subtask { id, title, completed, source?, kept?, priority? }`（型は `app/types/task.ts`）
   - `source`: `"ai"`（AI提案）/ `"user"`（ユーザーが追加・編集）。旧データの未設定は `"user"` 扱い（消さない側に倒す）
   - AI提案を内容変更して保存すると `"user"` に変わる
 - 永続化は **LocalStorage**（キー: `task_decomposer_tasks`）。バックエンド DB は無い
@@ -99,6 +103,11 @@ proxy.ts                  # ページのリクエストごとに nonce を作り
   - ⚡ と AI再提案は同じタスクで同時に動かさない（どちらかの処理中はもう一方のボタンを無効化）
 - AI 呼び出しはブラウザ側でも `AI_REQUEST_TIMEOUT_MS`（20 秒）で打ち切り、`CLIENT_TIMEOUT` としてカード内に表示する（分解中のまま固まらないように）
 - タスク・手順の削除は確認を出さず、画面下に「元に戻す」を表示する（`deletedItems`・非永続、最大 10 件。最後の削除から 10 秒で消える）。続けて消した場合は新しい順に1つずつ戻せる（`lib/taskUpdates.ts` の `restoreDeleted`。戻したタスクは `isDecomposing` を持たない）
+- **発表会（2026-11-16）のフィードバックで追加した機能**
+  - 優先度: `Subtask.priority`（`"high" | "medium" | "low"`、任意）。AI が `PRIORITY_RULES` に従って付け、バッジのタップで 高→中→低→高（`cycleSubtaskPriority`）。並び順は実行順のまま（優先度で並べ替えない）。各手順に番号を表示し、カード下部に未完了の優先度ごとの件数を出す
+  - お手本: カードの「☆ お手本にする」で、その時点のタスク名と手順（最大 10 件）を `task_decomposer_reference` に保存（1 件だけ）。`decompose` モード（一から分解）のときだけ `referenceExample` として API に送り、プロンプトで細かさ・書き方を揃えさせる（文言の流用は禁止と明記）。自分自身のタスクには送らない
+  - 入力の案内: 入力欄の下にコツと `TASK_INPUT_EXAMPLES`（タップで入力欄に入る）。`getTaskInputHint` が短すぎる（6 文字未満）入力・「、」2 つ以上 / 全角「／」の入力に注意を出す
+  - テキストでコピー: `formatTaskAsText` で `- [ ] 手順（優先度: 高）` 形式にしてクリップボードへ
 - 最初の未完了サブタスクに「次」バッジを表示。AI失敗時は `taskErrors` でカード内にエラー表示
 - サブタスクは ↑↓ ボタンで並べ替え（スマホでも操作しやすいようドラッグは使わない）
 - すべて完了したタスクは自動で折りたたむ（`expandedTaskIds` で開閉、非永続）
@@ -116,7 +125,7 @@ proxy.ts                  # ページのリクエストごとに nonce を作り
 
 ### API（`app/api/decompose/route.ts`）
 - 入力の検証・切り詰めは `parseDecomposeRequest`、Gemini 応答の JSON 解釈は `parseGeminiOutput`（壊れた JSON は例外にせず空扱い → 次のモデルへ）。本文が JSON でなければ 400。返す件数は `count` で切り詰める
-- リクエスト: `{ taskTitle: string, count?: number, existingSubtasks?: { title, completed }[], rejectedSubtasks?: string[], focusSubtask?: string }`（count 既定値 5、1〜10 に制限）
+- リクエスト: `{ taskTitle: string, count?: number, existingSubtasks?: { title, completed }[], rejectedSubtasks?: string[], focusSubtask?: string, referenceExample?: { taskTitle, subtasks: string[] } }`（count 既定値 5、1〜10 に制限）
   - `focusSubtask` あり → その手順を細分化 / `existingSubtasks` あり → 完了済みの続きから、ユーザーの手順と重複しない「次に取り組む N 個」を提案（個数が少なくても1つを大きくしない） / どちらも無し → 一から分解
   - プロンプトは `lib/decomposePrompt.ts` の `buildDecomposePrompt`（テストあり）。いずれも「10分以内で終わる最低限の一歩・動詞で終わる具体的な行動」を条件にする
   - **誰にでも当てはまる一般的な行動にする**（コンセプトは「スタートアップブースター」）。特定のアプリ・サービス・製品名や、特定の道具・お金・場所・人がある前提の手順は出させない（×「英単語アプリを開く」→ ○「覚えたい英単語を3つ選ぶ」）。ユーザーがタスク名や手順で自分から指定した道具は使ってよい
@@ -128,7 +137,7 @@ proxy.ts                  # ページのリクエストごとに nonce を作り
   - 正当な目的が考えられるもの（防犯・学習・創作など）まで断らないよう、プロンプトでは「明らかな場合のみ」拒否させている
   - 自傷・自殺に関わる場合は、カード内のエラーで相談窓口（よりそいホットライン）を案内する
 - ヘッダー: `x-gemini-api-key`（必須）
-- レスポンス: `{ subtasks: string[] }`、エラー時は `{ error, code? }`（400 / 401 / 403 / 422 / 429 / 500 / 504。`code` は `lib/gemini.ts` の `ERROR_CODES`）
+- レスポンス: `{ subtasks: { title: string, priority?: "high" | "medium" | "low" }[] }`（画面側は旧形式の文字列配列も受け付ける）、エラー時は `{ error, code? }`（400 / 401 / 403 / 422 / 429 / 500 / 504。`code` は `lib/gemini.ts` の `ERROR_CODES`）
 - 乱用対策（`lib/requestGuard.ts`、`/api/verify-key` も同様）: `Origin` が無い・別サイトなら 403 + `FORBIDDEN_ORIGIN`。呼び出し元 IP ごとに 1 分 20 回（verify-key は 10 回）を超えたら 429 + `TOO_MANY_REQUESTS`（メモリ上の目安。厳密には Vercel Firewall を使う）
 - Gemini に `responseMimeType: "application/json"` + `responseSchema` で JSON 出力を強制。`thinkingConfig: { thinkingLevel: "low" }` で思考を抑えて高速化
   - `temperature` は指定しない（Gemini 3 系は低温度だと出力がループしやすい）

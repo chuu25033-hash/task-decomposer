@@ -90,7 +90,7 @@ describe("parseGeminiOutput", () => {
   it("正しい JSON からサブタスクを取り出す", () => {
     expect(parseGeminiOutput('{"refusal":"none","subtasks":[" 机を拭く ","", 3]}')).toEqual({
       refusal: "none",
-      subtasks: ["机を拭く"],
+      subtasks: [{ title: "机を拭く" }],
     });
   });
 

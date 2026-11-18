@@ -36,8 +36,17 @@ export const SAFETY_RULES = `安全性の判断（refusal の決め方）:
 - "none" 以外のときは subtasks を空配列にする
 - "none" で分解するときは、手口の実行方法ではなく、正当な目的を達成するための行動（公的機関の情報を読む・対策を実施する等）にする`;
 
+// 優先度（どの手順を先に・必ずやるべきか）。発表会で「優先度は同じなのか」が分からないと指摘があったため
+// 並び順（実行する順）とは別に、重要度を付けさせる
+export const PRIORITY_RULES = `優先度（priority の決め方）:
+- "high": 目標の達成に欠かせない、または他の手順の前提になるもの
+- "medium": 進めるうえで普通に必要なもの
+- "low": 余裕があれば行えばよい・後回しにしても目標は達成できるもの
+- 並び順は実行する順番のままにし、優先度のために並べ替えない
+- 実際の重要度で判断する。差がなければ同じ優先度でよい`;
+
 const OUTPUT_FORMAT = `以下のJSON形式のみで出力してください。
-{"refusal":"none","subtasks":["アクション1","アクション2"]}`;
+{"refusal":"none","subtasks":[{"title":"アクション1","priority":"high"},{"title":"アクション2","priority":"medium"}]}`;
 
 // Gemini の generateContent に送る本文（API Route と比較用スクリプトで同じ設定を使う）
 export const buildGeminiRequestBody = (prompt: string) => ({
@@ -49,7 +58,18 @@ export const buildGeminiRequestBody = (prompt: string) => ({
       type: "OBJECT",
       properties: {
         refusal: { type: "STRING", enum: ["none", "unethical", "self_harm"] },
-        subtasks: { type: "ARRAY", items: { type: "STRING" } },
+        subtasks: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              title: { type: "STRING" },
+              priority: { type: "STRING", enum: ["high", "medium", "low"] },
+            },
+            required: ["title", "priority"],
+            propertyOrdering: ["title", "priority"],
+          },
+        },
       },
       required: ["refusal", "subtasks"],
       propertyOrdering: ["refusal", "subtasks"],
@@ -69,6 +89,7 @@ export const buildDecomposePrompt = (
     omittedCompletedCount,
     rejectedSubtasks,
     focusSubtask,
+    referenceExample,
   }: DecomposeRequest,
   rules: string = ACTION_RULES
 ): string => {
@@ -88,6 +109,18 @@ export const buildDecomposePrompt = (
 ${rejectedSubtasks.map((s) => `- ${s}`).join("\n")}`
     : "";
 
+  // 「さっきのように出力して」：ユーザーが気に入った過去の分解をお手本として渡し、粒度・書き方を揃える
+  // （× / ○ の例と同じく文言が流用されやすいため、内容は真似しないよう明記する）
+  const referenceNote = referenceExample
+    ? `
+
+参考: 以下はユーザーが「この分け方が良い」と選んだ過去の分解例です。
+手順の細かさ・1つあたりの長さ・書き方（文体）・並べ方をこの例に揃えてください。
+ただし、例の文言や内容はそのまま使わず、今回のタスクに合った行動を考えてください。
+過去のタスク:「${referenceExample.taskTitle}」
+${referenceExample.subtasks.map((s) => `- ${s}`).join("\n")}`
+    : "";
+
   let instruction: string;
   if (focusSubtask) {
     // 行き詰まった1ステップを細分化
@@ -105,12 +138,14 @@ ${existingList}
 目標達成まで${count}個で収まらない場合も、1つのアクションを大きくせず、先に取り組むべきものから順に提案してください。${rejectedNote}`;
   } else {
     instruction = `タスク:「${taskTitle}」
-上記に取りかかるための、誰でも今すぐ始められる最低限のアクションに正確に【${count}個】分解してください。${rejectedNote}`;
+上記に取りかかるための、誰でも今すぐ始められる最低限のアクションに正確に【${count}個】分解してください。${rejectedNote}${referenceNote}`;
   }
 
   return `${instruction}
 
 ${rules}
+
+${PRIORITY_RULES}
 
 ${SAFETY_RULES}
 

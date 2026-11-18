@@ -45,11 +45,24 @@ describe("POST /api/decompose", () => {
     mockFetch.mockResolvedValue(geminiOk({ refusal: "none", subtasks: ["a", "b", "c"] }));
     const res = await POST(request({ taskTitle: "掃除", count: 2 }));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ subtasks: ["a", "b"] });
+    expect(await res.json()).toEqual({ subtasks: [{ title: "a" }, { title: "b" }] });
     // キーは URL ではなくヘッダーで渡す
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).not.toContain("test-key");
     expect(init.headers["x-goog-api-key"]).toBe("test-key");
+  });
+
+  it("手順ごとの優先度をそのまま返す", async () => {
+    mockFetch.mockResolvedValue(
+      geminiOk({ refusal: "none", subtasks: [{ title: "a", priority: "high" }, { title: "b", priority: "low" }] })
+    );
+    const res = await POST(request({ taskTitle: "掃除", count: 2 }));
+    expect(await res.json()).toEqual({
+      subtasks: [
+        { title: "a", priority: "high" },
+        { title: "b", priority: "low" },
+      ],
+    });
   });
 
   it("1つ目のモデルが 503 なら次のモデルで再試行する", async () => {
@@ -107,7 +120,7 @@ describe("POST /api/decompose", () => {
       )
       .mockResolvedValueOnce(geminiOk({ refusal: "none", subtasks: ["a"] }));
     const res = await POST(request({ taskTitle: "掃除" }));
-    expect(await res.json()).toEqual({ subtasks: ["a"] });
+    expect(await res.json()).toEqual({ subtasks: [{ title: "a" }] });
   });
 
   it("入力が不正なら 400、キーが無ければ 401、別サイトからは 403", async () => {

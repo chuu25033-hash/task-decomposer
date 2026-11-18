@@ -39,6 +39,48 @@ const addTask = async (title: string) => {
 };
 
 describe("Home", () => {
+  it("AIが付けた優先度を手順に表示する", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({ subtasks: [{ title: "テーマを決める", priority: "high" }, { title: "見出しを書く", priority: "low" }] })
+    );
+    const card = await addTask("レポートを書く");
+    fireEvent.click(within(card).getByRole("button", { name: /AI分解/ }));
+    expect(await within(card).findByLabelText("優先度 高（タップで変更）")).toBeTruthy();
+    fireEvent.click(within(card).getByLabelText("優先度 低（タップで変更）"));
+    expect(within(card).getAllByLabelText("優先度 高（タップで変更）")).toHaveLength(2);
+  });
+
+  it("お手本にしたタスクの分け方を、次に一から分解するときに送る", async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ subtasks: ["テーマを決める", "見出しを書く"] }));
+    const first = await addTask("レポートを書く");
+    fireEvent.click(within(first).getByRole("button", { name: /AI分解/ }));
+    await within(first).findByText("テーマを決める");
+    fireEvent.click(within(first).getByRole("button", { name: /お手本にする/ }));
+    expect(screen.getByText(/の分け方に揃えて分解します/)).toBeTruthy();
+
+    const input = screen.getByLabelText("新しいタスク");
+    fireEvent.change(input, { target: { value: "発表資料を作る" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const second = await screen.findByRole("article", { name: "発表資料を作る" });
+    fireEvent.click(within(second).getByRole("button", { name: /AI分解/ }));
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body).referenceExample).toEqual({
+      taskTitle: "レポートを書く",
+      subtasks: ["テーマを決める", "見出しを書く"],
+    });
+    // 再読み込みしても残る
+    expect(JSON.parse(localStorage.getItem("task_decomposer_reference")!).taskTitle).toBe("レポートを書く");
+  });
+
+  it("入力欄の例をタップすると入力欄に入り、短い入力には案内を出す", async () => {
+    render(<Home />);
+    const input = (await screen.findByLabelText("新しいタスク")) as HTMLInputElement;
+    fireEvent.click(screen.getByRole("button", { name: "机の上を片付けて勉強できる状態にする" }));
+    expect(input.value).toBe("机の上を片付けて勉強できる状態にする");
+    fireEvent.change(input, { target: { value: "勉強" } });
+    expect(screen.getByRole("status").textContent).toContain("提案がぶれやすく");
+  });
+
   it("タスクを追加して AI分解すると、手順が表示され保存される", async () => {
     mockFetch.mockResolvedValue(jsonResponse({ subtasks: ["机の上を片付ける", "ノートを開く"] }));
     const card = await addTask("  レポートを書く  ");

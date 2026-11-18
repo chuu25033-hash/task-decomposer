@@ -40,6 +40,28 @@ const BUTTONS: { chip: ReactNode; text: ReactNode }[] = [
     ),
   },
   {
+    chip: (
+      <Chip className="border-rose-400/70 bg-rose-500/15 text-rose-200 font-bold">優先:高</Chip>
+    ),
+    text: (
+      <>
+        手順の<b className="text-cyan-300">優先度</b>（高: 欠かせない / 中 / 低: 後回しでよい）。タップで変更。番号は実行する順番です
+      </>
+    ),
+  },
+  {
+    chip: <Chip className="border-amber-400/70 bg-amber-400/15 text-amber-200">☆お手本</Chip>,
+    text: (
+      <>
+        気に入った分け方を<b className="text-cyan-300">お手本</b>に。次に新しいタスクを分解するとき、細かさや書き方を揃えます
+      </>
+    ),
+  },
+  {
+    chip: <Chip className="border-slate-700 text-slate-300">📋</Chip>,
+    text: "手順をチェックリスト形式のテキストでコピー（メモ・ToDo アプリに貼り付けられます）",
+  },
+  {
     chip: <Chip className="border-transparent text-cyan-500 text-xs">⚡</Chip>,
     text: "手が止まった手順を、さらに小さな3つに分けます",
   },
@@ -97,7 +119,7 @@ export default function HelpModal({ onClose }: Props) {
         {/* 基本の流れ */}
         <ol className="space-y-3 mb-6">
           {[
-            "大きなタスクを入力して「追加」",
+            "大きなタスクを「何を・どこまで」まで書いて「追加」",
             "個数（1/3/5/10）を選んで「⚡AI分解」",
             "「次」の印がついた手順から取りかかり、終わったらチェック",
           ].map((step, i) => (

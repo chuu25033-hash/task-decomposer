@@ -49,7 +49,8 @@ const generate = async (prompt: string, apiKey: string): Promise<string[]> => {
     const data = await res.json();
     const { refusal, subtasks } = parseGeminiOutput(data.candidates?.[0]?.content?.parts?.[0]?.text);
     if (refusal !== "none") return [`（拒否: ${refusal}）`];
-    if (subtasks.length > 0) return subtasks.slice(0, COUNT);
+    // 簡易判定は手順の文言だけで行う（優先度は判定に含めない）
+    if (subtasks.length > 0) return subtasks.slice(0, COUNT).map((s) => s.title);
     lastError = "空の応答";
   }
   throw new Error(lastError || "失敗しました");
